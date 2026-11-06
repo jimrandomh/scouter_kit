@@ -633,6 +633,7 @@ Request: 0: u8 op, 1: u8 tag, 2: body. Body offsets below count from the body's 
 | 0x1B | `ASSET_FORMAT` | 0: u32 0x534B4153; 4: u32 with 0x5057 in its high half: also wipe | empty: the job started (§6.10) |
 | 0x1C | `FLASH_CRC` | 0: u32 address, 4: u32 n | empty: the job started; the crc comes in `NOTICE` 8 (§6.10) |
 | 0x1D | `FC_INFO` | | 0.5.62+: 26 bytes (§6.11); status 7 in safe mode |
+| 0x1E | `PROP_SET` | 0.5.63+: (u8 id, u32 value) up to 4 times | empty: what `SYS_WRITE` does for each, between two instructions, in order; an error goes only to the log. For a host that runs no instructions (§6.11) |
 
 Ops 0x09 and 0x3F are reserved for diagnostics and test builds. A firmware before 0.5.56 answers 2 to ops 0x17–0x1C.
 
@@ -959,6 +960,10 @@ draws overwrite and `PRESENT` is idempotent. Up to three records of 16 640 bytes
 - 30, brightness: u8 1, u8 target (0…100, the level is `BRIGHTNESS` = max(1, target · 42 / 100) rounded), u8 visible,
   u16 fade (ignored). Not visible, the panel goes to standby and presents wait in the frame; visible again, it comes
   back with the next present, which the host sends with it.
+
+While the path is open the arena belongs to it, so a host reads properties with `PROPS`, writes them with `PROP_SET`, and
+hears triggers as `INPUT` (`EVENTS`). Packets also renew the microphone's lease (§6.5), and when the microphone stops its
+indicator's corner is repainted from the frame.
 
 `FC_INFO` body: 0: u8 version (1), 1: u8 flags (bit 0 the path is open), 2: u16 max message, 4: u16 max wire, 6: u32 ring
 size, 10: u32 history, 14: u32 records, 18: u32 nacks, 22: u32 presents.

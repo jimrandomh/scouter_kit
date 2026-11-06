@@ -314,6 +314,7 @@ int exec_fc_panel_begin(int x, int y, int w, int h);
 void exec_fc_panel_end(void);
 void exec_fc_panel(uint32_t v);
 void exec_fc_brightness(uint32_t level);
+void exec_prop_set(uint32_t id, uint32_t value);
 
 /* fc.c: Faceclaw's display path (VM.md §6.11) */
 #define EV_FC_ACK 0x08
@@ -323,6 +324,7 @@ void fc_link_down(void);
 bool fc_pending(void);
 void fc_run(void);
 void fc_reset(void);
+void fc_indicator_cleared(void);
 size_t fc_info(uint8_t *b);
 
 /* assets.c: the asset store (VM.md §6.10); control requests return 0 or an error code */

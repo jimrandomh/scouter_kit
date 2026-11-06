@@ -1394,6 +1394,13 @@ void vm_set_mic(struct vm *vm, int on)
 	h->panel_end(h->ctx);
 }
 
+int vm_prop_set(struct vm *vm, uint32_t id, uint32_t value)
+{
+	uint32_t detail;
+
+	return write_prop(vm, id, value, &detail);
+}
+
 int vm_prop(const struct vm *vm, uint32_t id, uint32_t *value)
 {
 	return read_prop(vm, id, vm->task.state != VM_TASK_NONE ? vm->task.trigger : 0xFF, value);

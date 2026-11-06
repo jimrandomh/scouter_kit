@@ -3324,7 +3324,8 @@ def faceclaw_body(e, res):
 
 
 def test_faceclaw(name):
-    return run(name, APP, faceclaw_body)
+    # The test build: the microphone works on the emulator's unencrypted link.
+    return run(name, CUR_MIC, faceclaw_body)
 
 
 TESTS = {"smoke": test_smoke, "vectors": test_vectors, "chain": test_chain, "chain_right": test_chain_right,

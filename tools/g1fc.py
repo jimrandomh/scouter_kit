@@ -288,6 +288,48 @@ def acceptance(arm, res, emulated=False, hold=None):
     checked("hide_show")
     assert arm.props("BRIGHTNESS")["BRIGHTNESS"] == 21, arm.props("BRIGHTNESS")
 
+    # PROP_SET: what a host without instructions has for properties.
+    rep = arm.ctrl("PROP_SET", struct.pack("<BI", g.PROPS["BRIGHTNESS_MAX"], 30))
+    assert rep["status"] == 0, rep
+    arm.wait(0.1)
+    assert arm.props("BRIGHTNESS_MAX")["BRIGHTNESS_MAX"] == 30, arm.props("BRIGHTNESS_MAX")
+    arm.ctrl("PROP_SET", struct.pack("<BIBI", g.PROPS["BRIGHTNESS_MAX"], 42, g.PROPS["IMU_RATE"], 26))
+    arm.wait(0.1)
+    p = arm.props("BRIGHTNESS_MAX", "IMU_RATE")
+    assert p["BRIGHTNESS_MAX"] == 42 and p["IMU_RATE"] == 26, p
+    arm.ctrl("PROP_SET", struct.pack("<BI", g.PROPS["IMU_RATE"], 13))
+    assert arm.ctrl("PROP_SET", b"abc")["status"] == 1
+    steps["prop_set"] = True
+
+    # The microphone (right arm, on an encrypted link or the emulator's test build): its indicator over the frame while on,
+    # drawn again over a present, and the frame back in its corner when it stops; the lease lasts as long as packets come.
+    if res.get("mic", True):
+        frames = []
+        arm.on_mic = lambda first, n, data, t_dev, t_host: frames.append((first, n, len(data)))
+        rep = arm.mic(True)
+        assert rep["status"] == 0, rep
+        arm.wait(0.5)
+        assert frames and all(n == 5 and size == 200 for _, n, size in frames), frames[:3]
+        withblock = Frame()
+        withblock.b[:] = f.b
+
+        def block(x0=620 if arm.hello()["role"] == "R" else 4):
+            withblock.b[:] = f.b
+            withblock.rect(x0, 4, 16, 16, lambda x, y: 15)
+            return withblock.crc()
+        assert panel_crc(arm) == block(), "the indicator is on the panel"
+        f.rect(600, 0, 40, 30, lambda x, y: 4)   # a draw right over it
+        link.send(draw_message([bbox(f, 600, 0, 40, 30)]))
+        link.send(PRESENT)
+        assert panel_crc(arm) == block(), "and stays through a present over it"
+        rep = arm.mic(False)
+        assert rep["status"] == 0, rep
+        arm.wait(0.5)
+        arm.on_mic = None
+        res["mic_events"] = len(frames)
+        assert panel_crc(arm) == f.crc(), "the frame is back under the indicator"
+        steps["microphone"] = True
+
     # Malformed messages: refused, the picture not presented, the stream alive.
     good = draw_message([bbox(f, 0, 0, 4, 2)])
     link.send(draw_message([bytes([1, 0, 1]) + struct.pack("<HHHH", 636, 0, 8, 2) + bytes([0x8F, 0x8F])]), want=KIND_NACK)
@@ -319,9 +361,14 @@ def acceptance(arm, res, emulated=False, hold=None):
         rec = bytes([BOTH | COMPRESSED | RESET]) + struct.pack("<HH", len(body), 0x1234) + body
         s = link.write_record(rec)
         assert link.wait(s)["kind"] == KIND_NACK
-    # A header that lies about the length; a first packet too short; a record too big; a continuation out of nowhere.
+    # A header that lies about the length; a first packet too short; a record too big; a continuation out of nowhere; a
+    # record whose last packet never came, which the next one's start ends.
     s = link.write_record(bytes([BOTH | RESET]) + struct.pack("<HH", 50, 0) + b"xx")
     assert link.wait(s)["kind"] == KIND_NACK
+    arm.tr.write("G1_FC", bytes([OPT_START, 204, BOTH | RESET]) + struct.pack("<HH", 50, 0) + b"never ends")
+    arm.tr.write("G1_FC", bytes([OPT_START | OPT_END, 205, BOTH | RESET]) + struct.pack("<HH", len(PRESENT), crc16(PRESENT)) + PRESENT)
+    assert link.wait(204)["kind"] == KIND_NACK
+    assert link.wait(205)["kind"] == KIND_ACK
     arm.tr.write("G1_FC", bytes([OPT_START | OPT_END, 201, BOTH]))
     assert link.wait(201)["kind"] == KIND_NACK
     arm.tr.write("G1_FC", bytes([OPT_START, 202, BOTH]) + struct.pack("<HH", 60000, 0) + b"z" * 20)
@@ -380,7 +427,9 @@ def main():
     args = ap.parse_args()
     arm = g.Arm(g.BleTransport(args.ble), name="arm")
     arm.setup()
-    res = {"hello": {k: v for k, v in arm.hello().items() if k in ("version", "role", "in_case", "encrypted", "safe_level")}}
+    hello = arm.hello()
+    res = {"hello": {k: v for k, v in hello.items() if k in ("version", "role", "in_case", "encrypted", "safe_level")},
+           "mic": hello["mic"] and hello["encrypted"]}
     acceptance(arm, res, hold=args.hold)
     res["pass"] = True
     print(json.dumps(res, indent=1))

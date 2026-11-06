@@ -17,11 +17,12 @@ LOG_MODULE_REGISTER(exec, LOG_LEVEL_INF);
 #define PANEL_IDLE_MS (CONFIG_G1_PANEL_IDLE_S * 1000)
 #define BEAT_TICKS 8192   /* 250 ms of RTC1 */
 
-enum req_op { R_START, R_STOP, R_RESET, R_MIC, R_MIC_FAULT, R_MIC_LEASE, R_HANG, R_EVENTS };
+enum req_op { R_START, R_STOP, R_RESET, R_MIC, R_MIC_FAULT, R_MIC_LEASE, R_HANG, R_EVENTS, R_PROP };
 
 struct req {
 	uint8_t op;
 	uint32_t arg;
+	uint32_t arg2;
 };
 
 static uint8_t arena[VM_ARENA_SIZE] __aligned(4);
@@ -350,6 +351,7 @@ static void mic_set(bool on, uint8_t rate, uint8_t per_event)
 		mic = false;
 		vm_set_mic(&vm, 0);
 		pending_off();
+		fc_indicator_cleared();
 		return;
 	}
 	vm_set_mic(&vm, 1);
@@ -416,6 +418,18 @@ void exec_fc_panel_end(void)
 	if (mic) {
 		vm_set_mic(&vm, 1);   /* the frame just went over the indicator */
 	}
+}
+
+/* PROP_SET (VM.md §6.4), from the control thread: applied by the executor between instructions */
+void exec_prop_set(uint32_t id, uint32_t value)
+{
+	struct req r = {.op = R_PROP, .arg = id, .arg2 = value};
+
+	while (k_msgq_put(&req_q, &r, K_NO_WAIT) != 0) {
+		k_msleep(1);
+	}
+	atomic_set(&reqs, 1);
+	k_sem_give(&wake);
 }
 
 void exec_fc_panel(uint32_t v)
@@ -558,12 +572,21 @@ static void apply(void)
 				mic_stopped(r.op == R_MIC_FAULT ? 2 : 3);
 				vm_set_mic(&vm, 0);
 				pending_off();
+				fc_indicator_cleared();
 			}
 			break;
 		case R_EVENTS:
 			events = r.arg;
 			vm_set_events(&vm, events);
 			break;
+		case R_PROP: {
+			int err = vm_prop_set(&vm, r.arg, r.arg2);
+
+			if (err) {
+				LOG_WRN("PROP_SET 0x%02x: error %d", r.arg, err);
+			}
+			break;
+		}
 		case R_HANG:
 			for (;;) {
 				k_busy_wait(1000);

@@ -194,6 +194,8 @@ void vm_reset_session(struct vm *vm, int clear_arena);
 void vm_set_mic(struct vm *vm, int on);
 /* PROPS: one property; 0, or 5 for an unknown ID */
 int vm_prop(const struct vm *vm, uint32_t id, uint32_t *value);
+/* What SYS_WRITE does, for a host that runs no instructions: 0 or an error code. */
+int vm_prop_set(struct vm *vm, uint32_t id, uint32_t value);
 /* VM_STATUS reply body, 32 bytes */
 void vm_status(const struct vm *vm, uint8_t *out);
 

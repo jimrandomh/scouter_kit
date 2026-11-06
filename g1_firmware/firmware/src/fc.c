@@ -185,9 +185,8 @@ void fc_rx(const uint8_t *d, size_t len)
 		uint32_t need;
 
 		if (cur_open) {
-			/* the last one never ended: it is lost */
-			rx_abandon();
-			atomic_set(&rx_lost, 1);
+			/* the last one never ended: it is lost, and the host hears so now rather than at its ACK deadline */
+			rx_drop(cur_stream);
 		}
 		if (n < REC_HDR) {
 			rx_drop(stream);
@@ -604,6 +603,15 @@ void fc_run(void)
 
 	atomic_inc(&hb_exec);
 	answer(ok ? KIND_ACK : KIND_NACK, r.stream, ok ? size : 0, crc, true);
+}
+
+/* The microphone stopped: its indicator was cleared to black on the panel, over whatever the frame has there. */
+void fc_indicator_cleared(void)
+{
+	if (active) {
+		add_dirty(board_role() == 1 ? 4 : 620, 4, 16, 16);
+		present();
+	}
 }
 
 /* RESET_SESSION: the arena is the VM's again, whatever the path held there is gone. Executor. */

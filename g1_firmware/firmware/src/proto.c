@@ -24,7 +24,7 @@ enum ctrl_op {
 	C_PANEL_READ = 0x0B, C_ARENA_CRC = 0x0C, C_VM_START = 0x10, C_VM_STOP = 0x11, C_VM_STATUS = 0x12,
 	C_MIC = 0x13, C_EVENTS = 0x14, C_PANEL_GUARD = 0x16, C_ASSET_INFO = 0x17,
 	C_ASSET_LIST = 0x18, C_ASSET_PUT = 0x19, C_ASSET_DELETE = 0x1A, C_ASSET_FORMAT = 0x1B, C_FLASH_CRC = 0x1C,
-	C_FC_INFO = 0x1D,
+	C_FC_INFO = 0x1D, C_PROP_SET = 0x1E,
 	C_FAULT = 0x3F,
 };
 
@@ -434,6 +434,7 @@ static ssize_t on_fc(struct bt_conn *c, const struct bt_gatt_attr *attr, const v
 {
 	if (!offset && proto_writes_allowed()) {
 		health_bt_traffic();
+		mic_renew();   /* the host is here, and may be busy writing a big record: not a reason to lose the mic */
 		fc_rx(buf, len);
 	}
 	return len;
@@ -831,6 +832,16 @@ static void handle_ctrl(struct ctrl_req *r)
 			break;
 		}
 		return;
+	case C_PROP_SET:
+		/* (u8 id, u32 value) pairs; each is what SYS_WRITE does, in order, and its error only goes to the log */
+		if (alen == 0 || alen % 5) {
+			*st = E_MALFORMED;
+			break;
+		}
+		for (size_t i = 0; i < alen; i += 5) {
+			exec_prop_set(a[i], get32(a + i + 1));
+		}
+		break;
 	case C_FC_INFO:
 		if (safe_level() != 0) {
 			*st = E_SAFE_MODE;

@@ -196,6 +196,15 @@ and PROTOCOL.md) are those of the development tree; `g1host.py`, `vm_check.py`, 
 `draw_bench.py` and `mic_check.py` are in `../tools/`, the emulator tests in `emulator/tests/`, and
 `emu/fwsrc/g1v0` is `firmware/`.
 
+### What 0.5.63 adds (properties without instructions; the display path and the microphone)
+
+- **`PROP_SET`** (VM.md §6.4, `vm_prop_set`): a host on the display path has no arena words for `SYS_WRITE`'s operands.
+- **A record left open by the next record's start is answered with a nack**, so the host need not wait for its ACK deadline
+  (found on the arms: macOS drops writes without response it has no room for, bleak not waiting for
+  `canSendWriteWithoutResponse`; `tools/g1fc.py` paces its packets since).
+- **The microphone on the display path:** `FC` packets renew its lease; when it stops, `fc_indicator_cleared` repaints the
+  indicator's corner, which `vm_set_mic` left black. `tools/g1fc.py` checks both by `PANEL_READ`.
+
 ### What 0.5.62 adds (Faceclaw's display path)
 
 - **`src/fc.c`, `src/fc_inflate.c`** (VM.md §6.11): the records of Faceclaw's custom firmware for the G2, on a new `FC`

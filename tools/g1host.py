@@ -942,7 +942,7 @@ CTRL = {"HELLO": 0x01, "PING": 0x02, "STATUS": 0x03, "RESET_SESSION": 0x04, "LIN
         "HEALTH_OK": 0x07, "REBOOT": 0x08, "DIAG": 0x09, "PROPS": 0x0A, "PANEL_READ": 0x0B, "ARENA_CRC": 0x0C,
         "VM_START": 0x10, "VM_STOP": 0x11, "VM_STATUS": 0x12, "MIC": 0x13, "EVENTS": 0x14,
         "PANEL_GUARD": 0x16, "ASSET_INFO": 0x17, "ASSET_LIST": 0x18, "ASSET_PUT": 0x19, "ASSET_DELETE": 0x1A,
-        "ASSET_FORMAT": 0x1B, "FLASH_CRC": 0x1C, "FC_INFO": 0x1D, "FAULT": 0x3F}
+        "ASSET_FORMAT": 0x1B, "FLASH_CRC": 0x1C, "FC_INFO": 0x1D, "PROP_SET": 0x1E, "FAULT": 0x3F}
 ASSET_INFO_KEYS = ("data", "free", "largest", "entries", "state", "error", "flags", "seq")
 ASSET_STATES = {0: "idle", 1: "erasing", 2: "writing", 3: "verifying", 4: "done", 5: "failed"}
 FORMAT_MAGIC, WIPE_MAGIC = 0x534B4153, 0x50570000
