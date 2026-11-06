@@ -34,6 +34,8 @@ UUIDS = {
     "G1_CMD": "f3da4d59-277a-4fc9-a1ed-41c9c22d4401",
     "G1_CTRL": "f3da4d59-277a-4fc9-a1ed-41c9c22d4402",
     "G1_EVT": "f3da4d59-277a-4fc9-a1ed-41c9c22d4403",
+    "G1_PAIR": "f3da4d59-277a-4fc9-a1ed-41c9c22d4404",
+    "G1_FC": "f3da4d59-277a-4fc9-a1ed-41c9c22d4405",
     "SMP": "da2e7828-fbce-4e01-ae9e-261174997c48",
     "NUS_RX": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
     "NUS_TX": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
@@ -940,7 +942,7 @@ CTRL = {"HELLO": 0x01, "PING": 0x02, "STATUS": 0x03, "RESET_SESSION": 0x04, "LIN
         "HEALTH_OK": 0x07, "REBOOT": 0x08, "DIAG": 0x09, "PROPS": 0x0A, "PANEL_READ": 0x0B, "ARENA_CRC": 0x0C,
         "VM_START": 0x10, "VM_STOP": 0x11, "VM_STATUS": 0x12, "MIC": 0x13, "EVENTS": 0x14,
         "PANEL_GUARD": 0x16, "ASSET_INFO": 0x17, "ASSET_LIST": 0x18, "ASSET_PUT": 0x19, "ASSET_DELETE": 0x1A,
-        "ASSET_FORMAT": 0x1B, "FLASH_CRC": 0x1C, "FAULT": 0x3F}
+        "ASSET_FORMAT": 0x1B, "FLASH_CRC": 0x1C, "FC_INFO": 0x1D, "FAULT": 0x3F}
 ASSET_INFO_KEYS = ("data", "free", "largest", "entries", "state", "error", "flags", "seq")
 ASSET_STATES = {0: "idle", 1: "erasing", 2: "writing", 3: "verifying", 4: "done", 5: "failed"}
 FORMAT_MAGIC, WIPE_MAGIC = 0x534B4153, 0x50570000
@@ -1042,6 +1044,7 @@ class Arm:
         self.name = name
         self.log = log or (lambda s: print(s, flush=True))
         self.listeners = {"G1_EVT": self._on_evt}
+        self.fc_acks = []
         self.smp = Smp(self)
         self.epoch = None
         self.mirror = None
@@ -1992,6 +1995,10 @@ class Arm:
                     dr.update(done=True, event_lost=dr["t_end"] is None)
             return
         body = bytes(d[9:])
+        if typ == 0x08:   # EV_FC_ACK, the display path's (g1fc.py)
+            kind, stream, _msg, lens, size, crc = struct.unpack_from("<BBHBHH", body)
+            self.fc_acks.append({"kind": kind, "stream": stream, "lens": lens, "size": size, "crc": crc, "t": t})
+            return
         if typ == 0x02:
             err = self._error(body)
             err["t"] = t
@@ -2256,7 +2263,17 @@ def emu_check(arm, draw_idx, out_dir, label):
 
 # ---------------------------------------------------------------- demo content
 
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+
+def dejavu(name):
+    """DejaVu's file: Debian's fonts-dejavu-core, else a font folder of macOS (Homebrew's font-dejavu)."""
+    for d in ("/usr/share/fonts/truetype/dejavu", os.path.expanduser("~/Library/Fonts"), "/Library/Fonts"):
+        if os.path.exists(os.path.join(d, name)):
+            return os.path.join(d, name)
+    return os.path.join("/usr/share/fonts/truetype/dejavu", name)
+
+
+FONT_PATH = dejavu("DejaVuSans.ttf")
 FRAME_W, FRAME_H, FRAME_STRIDE = 640, 200, 320   # a 4 bpp frame bitmap the host builds in the arena
 PANEL_Y = 160                                      # where the host places it on the 640x480 panel
 
@@ -2325,7 +2342,7 @@ def demo_frames(arm, out_dir=None, at_lead=None):
     return out
 
 
-BOLD_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+BOLD_PATH = dejavu("DejaVuSans-Bold.ttf")
 
 
 def text_width(arm, font, s):
@@ -2656,6 +2673,7 @@ def main():
     p = sub.add_parser("drawtest", help="tricky DRAW pattern (odd/even sizes and positions, panel edges, "
                                         "clipping), each DRAW checked by PANEL_READ (emulator: pixel by pixel)")
     p.add_argument("--seed", type=int, default=7)
+    sub.add_parser("pair", help="0.5.61+, --ble: read PAIR, which makes CoreBluetooth pair (in the case, see VM.md 6.1)")
     p = sub.add_parser("brightness", help="BRIGHTNESS: stock's level 0..42 (no level: query)")
     p.add_argument("level", type=int, nargs="?")
     p = sub.add_parser("panel", help="PANEL: the panel on (all pixels 0), off, or in standby (fast wake)")
@@ -2872,6 +2890,12 @@ def main():
         print(f"drawtest {r['version']}: {r['checked']} DRAWs checked, bad cases {r['bad_cases']}"
               + (f", mismatches {r['mismatches']}" if "mismatches" in r else f", all match {r['all_match']}"),
               file=sys.stderr, flush=True)
+    elif args.cmd == "pair":
+        if not arm.tr.has("G1_PAIR"):
+            raise SystemExit("no PAIR characteristic: g1v0 0.5.61+ over --ble (or a stale GATT cache)")
+        out["pair_read"] = arm.tr.run(arm.tr.client.read_gatt_char(arm.tr.chars["G1_PAIR"]), timeout=90).hex()
+        arm.wait(1.0)
+        out["hello_after"] = arm.hello()
     elif args.cmd == "brightness":
         if args.level is not None:
             arm.set_brightness(args.level)

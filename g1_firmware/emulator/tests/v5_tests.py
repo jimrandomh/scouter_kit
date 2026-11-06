@@ -3317,6 +3317,16 @@ def test_assets(name):
     return run(name, CUR, assets_logged)
 
 
+def faceclaw_body(e, res):
+    """Faceclaw's display path (VM.md §6.11): tools/g1fc.py's acceptance, by PANEL_READ."""
+    import g1fc
+    g1fc.acceptance(e.arm, res, emulated=True)
+
+
+def test_faceclaw(name):
+    return run(name, APP, faceclaw_body)
+
+
 TESTS = {"smoke": test_smoke, "vectors": test_vectors, "chain": test_chain, "chain_right": test_chain_right,
          "power": test_power, "unattended": test_unattended, "examples": test_examples, "vm": test_vm, "mic": test_mic,
          "mic_capture": test_mic_capture, "mic_lease": test_mic_lease, "mic_popup": test_mic_popup, "imu_base": test_imu_base, "imu_base_left": test_imu_base_left,
@@ -3327,7 +3337,7 @@ TESTS = {"smoke": test_smoke, "vectors": test_vectors, "chain": test_chain, "cha
          "sessions": test_sessions, "imu": test_imu, "diag": test_diag, "pair_link": test_pair_link,
          "peer": test_peer, "pair_stream": test_pair_stream,
          "panel_read": test_panel_read, "video": test_video, "panel_guard": test_panel_guard,
-         "assets": test_assets}
+         "assets": test_assets, "faceclaw": test_faceclaw}
 for _t in ("crash", "hang", "thread_hang", "safe_mode", "lost_packet", "reset_mid_frame", "security", "pmic_watchdog",
            "i2c_errors", "no_pmic"):
     TESTS[_t] = getattr(common, "test_" + _t)

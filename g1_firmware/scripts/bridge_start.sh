@@ -41,5 +41,5 @@ quit
 RESC
 FIFO=$(mktemp -u)
 mkfifo "$FIFO"
-( exec 3<>"$FIFO"; rm -f "$FIFO"; G1_WORK=$WORK BOXNAME=$NAME BOXCWD=$WORK "$FW/scripts/box" "$WORK/renode/renode_1.16.1-dotnet_portable/renode" --disable-xwt --console --plain -e "i @$RUN/run.resc" <&3 > "$RUN/stdout.txt" 2>&1 ) &
+( exec 3<>"$FIFO"; rm -f "$FIFO"; G1_WORK=$WORK BOXNAME=$NAME BOXCWD=$WORK "$FW/scripts/box" "$WORK/renode/renode_1.16.1-dotnet_portable/renode" --disable-xwt --console --plain -e "i @$RUN/run.resc" <&3 > "$RUN/stdout.txt" 2>&1 ) >/dev/null 2>&1 &
 echo "$NAME"

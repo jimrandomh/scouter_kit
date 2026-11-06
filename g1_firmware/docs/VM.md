@@ -508,6 +508,8 @@ One GATT service; MCUmgr SMP (firmware update) runs beside it.
 | `CMD` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4401` | write, write without response | packets of host code (§6.2) |
 | `CTRL` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4402` | write, write without response | control requests (§6.4) |
 | `EVT` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4403` | notify | events (§6.3) |
+| `PAIR` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4404` | read, write, encrypted link only (0.5.61+, write 0.5.62+) | read: u8 1; a write is ignored. Either makes a host whose stack pairs on demand (CoreBluetooth, Android) pair; the bondable rule below still decides |
+| `FC` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4405` | write, write without response (0.5.62+) | Faceclaw's records (§6.11) |
 
 - The host subscribes to `EVT`, exchanges the MTU (ATT MTU ≥ 65), then sends `HELLO`. A `CMD` packet is
   at most `max_packet` = min(MTU − 3, 244) bytes and a `CTRL` request at most 24 bytes. Write without
@@ -576,6 +578,7 @@ made while no host is subscribed are lost, and an event longer than MTU − 3 is
 | 0x05 | `NOTICE` | 9: u8 kind, 10: body | 10 + body |
 | 0x06 | `MIC_DATA` | 9: u16 first (counter of the first frame), 11: u8 n (frames), 12: n × frame_bytes LC3 frames (§6.5) | 12 + n·frame_bytes |
 | 0x07 | `INPUT` | 9: u16 count, 11: u8 trigger (ID of §5.2), 12: u32 value | 16 |
+| 0x08 | `FC_ACK` | 9: u8 kind (1 ack, 3 nack), 10: u8 stream, 11: u16 0, 13: u8 lens (1 left, 2 right), 14: u16 decoded size, 16: u16 CRC (§6.11) | 18 |
 | 0x80 + op | control reply | 9: u8 tag, 10: u8 status (0 ok, else an error code), 11: body (may be empty on an error) | 11 + body |
 
 - `detail` for error 3 is the start of the failing range (`WRITE`/`WRITE_RLE` addr, `COPY`/`UNPACK` src or
@@ -629,6 +632,7 @@ Request: 0: u8 op, 1: u8 tag, 2: body. Body offsets below count from the body's 
 | 0x1A | `ASSET_DELETE` | 0: id[16] | empty: the job started (§6.10) |
 | 0x1B | `ASSET_FORMAT` | 0: u32 0x534B4153; 4: u32 with 0x5057 in its high half: also wipe | empty: the job started (§6.10) |
 | 0x1C | `FLASH_CRC` | 0: u32 address, 4: u32 n | empty: the job started; the crc comes in `NOTICE` 8 (§6.10) |
+| 0x1D | `FC_INFO` | | 0.5.62+: 26 bytes (§6.11); status 7 in safe mode |
 
 Ops 0x09 and 0x3F are reserved for diagnostics and test builds. A firmware before 0.5.56 answers 2 to ops 0x17–0x1C.
 
@@ -920,6 +924,44 @@ assets were (they do not come back). Status 0, 13 or 7.
 
 In safe mode `ASSET_INFO` and `ASSET_LIST` work and the others answer 7. Without a usable flash the store is
 unavailable: `ASSET_INFO` flags bit 0 clear, the jobs refused with 13, every `ASSET_LOAD` error 13.
+
+### 6.11 Faceclaw's display path (0.5.62)
+A second way to draw, beside the VM, for a host that composes each eye's frame itself and sends what changed. No
+instruction runs: the first record stops any program and takes the arena, until `RESET_SESSION`:
+
+| Arena bytes | Content |
+|---|---|
+| 0x00000–0x003FF | left to the VM (registers, table) |
+| 0x00400–0x25BFF | the frame, 153 600 bytes: 640 × 480, 4 bpp, as a bitmap of §3.1 |
+| 0x25C00–0x31BFF | the inflater: 32 KiB of history and a decoded message of up to 16 384 bytes |
+| 0x31C00–0x3FFFF | the receive ring, 58 368 bytes |
+
+**Packets.** A write to `FC`: u8 opts (0x80 first of the record, 0x40 last), u8 stream (the host's ID of this attempt,
+echoed in `FC_ACK`), then the next bytes of the record. Writes are obeyed under the rules of §6.1.
+
+**Record:** u8 flags, u16 wire (bytes of the body), u16 crc, body. Flags: bits 0–1 the lens, bit 2 (4) the body is
+compressed, bit 3 (8) a new stream starts here. The compressed bodies are one zlib stream (RFC 1950, a window up to
+32 KiB), each ending in `Z_SYNC_FLUSH`, which is never finished; a body that isn't compressed adds nothing to its
+history. crc is CRC-16/CCITT-FALSE of the decoded message. A record's body is at most 16 640 bytes on the wire.
+
+**`FC_ACK`** answers each record once it has been applied. A nack (crc, a bad stream, a refused message, no room in the
+ring) means the host goes back: after any nack, or a record dropped for any reason, compressed records are refused
+until one with bit 3 arrives, so a host repeats everything unanswered from a new stream. Repeating a message is safe:
+draws overwrite and `PRESENT` is idempotent. Up to three records of 16 640 bytes fit the ring.
+
+**Messages** (the decoded record; byte 0 & 127 is the type, others are acknowledged and ignored):
+- 26, draw: u16 count, then count × (u16 length, call). A call is u8 opcode, u8 flags = 0, arguments. Opcode 1, bbox: u8 0
+  and u8 x/4, y/2, w/4, h/2, or u8 1 and u16 x, y, w, h; then runs covering exactly w × h pixels left to right, top to
+  bottom, across rows: [n: high nibble, 1…15 | colour] or [colour][n8] or [colour][0][n16, little-endian]. Opcode 9, clear:
+  u8 colour. Other opcodes and flags are refused. Draws change the frame only.
+- 28, present: what changed in the frame since the last present goes to the panel, latched at once (a rectangle's x
+  rounded down to a whole byte), powering it on first, the whole frame if it had lost its image. As `DRAW`, for §6.6.
+- 30, brightness: u8 1, u8 target (0…100, the level is `BRIGHTNESS` = max(1, target · 42 / 100) rounded), u8 visible,
+  u16 fade (ignored). Not visible, the panel goes to standby and presents wait in the frame; visible again, it comes
+  back with the next present, which the host sends with it.
+
+`FC_INFO` body: 0: u8 version (1), 1: u8 flags (bit 0 the path is open), 2: u16 max message, 4: u16 max wire, 6: u32 ring
+size, 10: u32 history, 14: u32 records, 18: u32 nacks, 22: u32 presents.
 
 ## 7. Time and eye sync
 - **Clock model** (`PING`): the host sends its time s; the arm replies with t_rx (receive) and t_tx

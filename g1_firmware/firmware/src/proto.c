@@ -24,6 +24,7 @@ enum ctrl_op {
 	C_PANEL_READ = 0x0B, C_ARENA_CRC = 0x0C, C_VM_START = 0x10, C_VM_STOP = 0x11, C_VM_STATUS = 0x12,
 	C_MIC = 0x13, C_EVENTS = 0x14, C_PANEL_GUARD = 0x16, C_ASSET_INFO = 0x17,
 	C_ASSET_LIST = 0x18, C_ASSET_PUT = 0x19, C_ASSET_DELETE = 0x1A, C_ASSET_FORMAT = 0x1B, C_FLASH_CRC = 0x1C,
+	C_FC_INFO = 0x1D,
 	C_FAULT = 0x3F,
 };
 
@@ -68,6 +69,8 @@ static struct bt_uuid_128 svc_uuid = BT_UUID_INIT_128(G1_UUID(0));
 static struct bt_uuid_128 cmd_uuid = BT_UUID_INIT_128(G1_UUID(1));
 static struct bt_uuid_128 ctrl_uuid = BT_UUID_INIT_128(G1_UUID(2));
 static struct bt_uuid_128 evt_uuid = BT_UUID_INIT_128(G1_UUID(3));
+static struct bt_uuid_128 pair_uuid = BT_UUID_INIT_128(G1_UUID(4));
+static struct bt_uuid_128 fc_uuid = BT_UUID_INIT_128(G1_UUID(5));
 
 bool proto_connected(void) { return conn != NULL; }
 
@@ -409,6 +412,33 @@ static ssize_t on_ctrl(struct bt_conn *c, const struct bt_gatt_attr *attr, const
 	return len;
 }
 
+/* PAIR (VM.md §6.1): readable and writable only on an encrypted link, so that a host whose stack pairs on demand
+ * (CoreBluetooth has no pairing call) pairs by reading it or writing to it. It only triggers pairing: whether the arm
+ * bonds is still proto_update_bondable's rule. */
+static ssize_t on_pair_read(struct bt_conn *c, const struct bt_gatt_attr *a, void *buf, uint16_t len, uint16_t off)
+{
+	const uint8_t encrypted = 1;
+
+	return bt_gatt_attr_read(c, a, buf, len, off, &encrypted, sizeof(encrypted));
+}
+
+static ssize_t on_pair_write(struct bt_conn *c, const struct bt_gatt_attr *attr, const void *buf, uint16_t len,
+			     uint16_t offset, uint8_t flags)
+{
+	return len;
+}
+
+/* FC (VM.md §6.11): a packet of Faceclaw's records */
+static ssize_t on_fc(struct bt_conn *c, const struct bt_gatt_attr *attr, const void *buf, uint16_t len,
+		     uint16_t offset, uint8_t flags)
+{
+	if (!offset && proto_writes_allowed()) {
+		health_bt_traffic();
+		fc_rx(buf, len);
+	}
+	return len;
+}
+
 BT_GATT_SERVICE_DEFINE(g1_svc,
 	BT_GATT_PRIMARY_SERVICE(&svc_uuid),
 	BT_GATT_CHARACTERISTIC(&cmd_uuid.uuid, BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
@@ -417,6 +447,10 @@ BT_GATT_SERVICE_DEFINE(g1_svc,
 			       BT_GATT_PERM_WRITE, NULL, on_ctrl, NULL),
 	BT_GATT_CHARACTERISTIC(&evt_uuid.uuid, BT_GATT_CHRC_NOTIFY, BT_GATT_PERM_NONE, NULL, NULL, NULL),
 	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
+	BT_GATT_CHARACTERISTIC(&pair_uuid.uuid, BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE,
+			       BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT, on_pair_read, on_pair_write, NULL),
+	BT_GATT_CHARACTERISTIC(&fc_uuid.uuid, BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+			       BT_GATT_PERM_WRITE, NULL, on_fc, NULL),
 );
 
 static size_t reply_head(uint8_t *b, uint8_t op, uint8_t tag, uint8_t status)
@@ -797,6 +831,13 @@ static void handle_ctrl(struct ctrl_req *r)
 			break;
 		}
 		return;
+	case C_FC_INFO:
+		if (safe_level() != 0) {
+			*st = E_SAFE_MODE;
+			break;
+		}
+		n += fc_info(&b[n]);
+		break;
 	default:
 		*st = E_UNKNOWN_OP;
 		break;
@@ -883,6 +924,7 @@ static void disconnected(struct bt_conn *c, uint8_t reason)
 	conn_encrypted = false;
 	events_mask = exec_events(0);
 	exec_link_down();
+	fc_link_down();
 	LOG_INF("disconnected (reason 0x%02x)", reason);
 	adv_kick();
 }

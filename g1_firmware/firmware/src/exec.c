@@ -394,6 +394,40 @@ static void h_brightness(void *ctx, uint32_t level)
 	peer_kick();
 }
 
+/* Faceclaw's display path (fc.c) runs on this thread, and goes through the same panel calls as DRAW and PANEL. */
+uint8_t *exec_arena(void)
+{
+	return arena;
+}
+
+void exec_fc_stop_vm(void)
+{
+	vm_stop(&vm);
+}
+
+int exec_fc_panel_begin(int x, int y, int w, int h)
+{
+	return h_panel_begin(NULL, x, y, w, h);
+}
+
+void exec_fc_panel_end(void)
+{
+	h_panel_end(NULL);
+	if (mic) {
+		vm_set_mic(&vm, 1);   /* the frame just went over the indicator */
+	}
+}
+
+void exec_fc_panel(uint32_t v)
+{
+	h_panel_power(NULL, v);
+}
+
+void exec_fc_brightness(uint32_t level)
+{
+	h_brightness(NULL, level);
+}
+
 static void h_imu_rate(void *ctx, uint32_t hz)
 {
 	imu_set_rate(hz);
@@ -449,6 +483,7 @@ static void reset_session(bool clear_arena)
 	q_exec_next = 0;
 	proto_new_epoch();
 	k_spin_unlock(&qlock, key);
+	fc_reset();
 	vm_reset_session(&vm, clear_arena);
 	if (imu_present() && imu_gyro_rate()) {
 		imu_set_gyro_rate(0);
@@ -581,6 +616,7 @@ static void exec_thread(void *a, void *b, void *c)
 {
 	self = k_current_get();
 	vm_init(&vm, arena, &host, safe_level() != 0);
+	fc_init();
 	/* the panel is off at boot (VM.md §6.6): powered once to check its ID (HELLO panel ok, NOTICE 3) and to
 	 * find the light sensor on its rails, then off until the first DRAW or PANEL = 1 */
 	if (pmic_wait_ready(K_SECONDS(5)) && safe_level() == 0) {
@@ -594,12 +630,13 @@ static void exec_thread(void *a, void *b, void *c)
 		uint32_t wait;
 
 		apply();
+		fc_run();
 		wait = vm_run(&vm);
 		clk_cnt = UINT32_MAX;
 		atomic_inc(&hb_exec);
 		imu_need();
 		unattended();
-		if (wait) {
+		if (wait && !fc_pending()) {
 			k_sem_take(&wake, wait >= 500000 ? K_MSEC(500) : K_USEC(wait));
 		}
 	}

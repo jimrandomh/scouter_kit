@@ -307,6 +307,23 @@ const struct vm_stats *exec_stats(void);
 uint32_t exec_last_draw_us(void);
 uint32_t exec_arena_crc(uint32_t addr, uint32_t len, uint8_t *first16);
 void exec_arena_copy(uint32_t addr, uint8_t *dst, uint32_t n);
+/* fc.c's side of the executor */
+uint8_t *exec_arena(void);
+void exec_fc_stop_vm(void);
+int exec_fc_panel_begin(int x, int y, int w, int h);
+void exec_fc_panel_end(void);
+void exec_fc_panel(uint32_t v);
+void exec_fc_brightness(uint32_t level);
+
+/* fc.c: Faceclaw's display path (VM.md §6.11) */
+#define EV_FC_ACK 0x08
+void fc_init(void);
+void fc_rx(const uint8_t *d, size_t len);
+void fc_link_down(void);
+bool fc_pending(void);
+void fc_run(void);
+void fc_reset(void);
+size_t fc_info(uint8_t *b);
 
 /* assets.c: the asset store (VM.md §6.10); control requests return 0 or an error code */
 void assets_info(uint8_t *out);   /* 20 bytes */

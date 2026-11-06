@@ -958,6 +958,8 @@ namespace Antmicro.Renode.Peripherals.Wireless
             if(s == "f3da4d59277a4fc9a1ed41c9c22d4401") return "G1_CMD";
             if(s == "f3da4d59277a4fc9a1ed41c9c22d4402") return "G1_CTRL";
             if(s == "f3da4d59277a4fc9a1ed41c9c22d4403") return "G1_EVT";
+            if(s == "f3da4d59277a4fc9a1ed41c9c22d4404") return "G1_PAIR";
+            if(s == "f3da4d59277a4fc9a1ed41c9c22d4405") return "G1_FC";
             return null;
         }
 

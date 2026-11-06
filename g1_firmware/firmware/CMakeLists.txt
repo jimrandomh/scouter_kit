@@ -9,12 +9,14 @@ target_sources(app PRIVATE
 	src/early.S src/retained.c src/health.c src/board.c src/netcore.c
 	src/pmic.c src/power.c src/imu.c src/diag.c src/caselink.c src/panel.c src/exec.c src/proto.c src/netfallback.c src/netimg.S src/main.c
 	src/mic.c src/touch.c src/touchcfg.S src/light.c src/peer.c src/idle.c src/guard.c src/assets.c src/bonds.c
+	src/fc.c src/fc_inflate.c
 	${G1_VM_DIR}/vm.c ${G1_VM_DIR}/vm_gfx.c)
 target_include_directories(app PRIVATE ${G1_VM_DIR})
 # DIAG BONDS reads the host's struct bt_keys (aging counter, key flags): its internal header, for this file only.
 set_source_files_properties(src/bonds.c PROPERTIES INCLUDE_DIRECTORIES ${ZEPHYR_BASE}/subsys/bluetooth/host)
 # The interpreter runs every host packet and program instruction: -O2 instead of the image's -Os.
 set_source_files_properties(${G1_VM_DIR}/vm.c ${G1_VM_DIR}/vm_gfx.c PROPERTIES COMPILE_OPTIONS "-O2")
+set_source_files_properties(src/fc.c src/fc_inflate.c PROPERTIES COMPILE_OPTIONS "-O2")
 # liblc3 (Apache-2.0, vendored with its licence): the LC3 encoder of the microphone, 10 ms frames only.
 set(G1_LC3_DIR ${G1_SK_DIR}/third_party/liblc3)
 file(GLOB G1_LC3_SRC ${G1_LC3_DIR}/src/*.c)

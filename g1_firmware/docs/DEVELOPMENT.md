@@ -196,6 +196,27 @@ and PROTOCOL.md) are those of the development tree; `g1host.py`, `vm_check.py`, 
 `draw_bench.py` and `mic_check.py` are in `../tools/`, the emulator tests in `emulator/tests/`, and
 `emu/fwsrc/g1v0` is `firmware/`.
 
+### What 0.5.62 adds (Faceclaw's display path)
+
+- **`src/fc.c`, `src/fc_inflate.c`** (VM.md §6.11): the records of Faceclaw's custom firmware for the G2, on a new `FC`
+  characteristic, answered by a new `FC_ACK` event. The BT thread copies packets into a ring in the arena and publishes
+  whole records; the executor runs one record per pass of its loop, so the panel is only touched from one thread and
+  the health beat keeps going. The arena stays the only large buffer: +6.8 KB of flash, +1.6 KB of RAM.
+- **The decoder** decodes one bit at a time, which is plenty at the link's rate, and rebuilds its tables per block. A whole
+  record is in memory and ends in a sync flush, so it never suspends. `tests/fc_inflate_test.c` runs it against zlib
+  under ASan and UBSan, damaged streams included.
+- **`PAIR` takes writes too:** a write with response is what every host's stack can do without a new call.
+- **Tests:** `faceclaw` (`tools/g1fc.py`, the same acceptance on an arm with `--ble`): every step checked by `PANEL_READ`,
+  malformed messages, damaged records, recovery, `RESET_SESSION`. Not in the emulator: encryption.
+
+### What 0.5.61 adds (a pairing trigger for CoreBluetooth)
+
+- **`PAIR`** (VM.md §6.1, `src/proto.c`): a characteristic readable only on an encrypted link. CoreBluetooth has no
+  pairing call and pairs only when an attribute needs it, and nothing did, so a Mac could not bond. `g1host.py pair`
+  reads it, in the case. Who may bond is unchanged (`proto_update_bondable`): out of the case the attempt is refused.
+  It follows `EVT`'s attributes, so `attr_g1_svc[6]` stays.
+- **Not in the emulator:** its central cannot encrypt, so the gate only shows the table change does no harm.
+
 ### What 0.5.60 adds (no case hold: the display policy is the program's)
 
 - **No case hold** (the user, 2026-11-05: display policy belongs in programs). In the case the panel works as

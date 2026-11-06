@@ -27,7 +27,7 @@ done
 chains() { [ -n "${G1_FROM:-}" ] && [ -f "$(img 0.4.10)" ] && [ -f "$(img "$G1_FROM")" ]; }
 NOCHAIN="chain, chain_right skipped: they need G1_FROM and the 0.4.10 and G1_FROM builds"
 if [ $# -eq 0 ]; then
-	TESTS="smoke power unattended security mic_capture mic_lease draw_bench panel_standby panel_prop panel_read video panel_guard in_case case_hold case_blank mic_popup_standby touch light gyro peer pair_link assets"
+	TESTS="smoke power unattended security mic_capture mic_lease draw_bench panel_standby panel_prop panel_read video panel_guard in_case case_hold case_blank mic_popup_standby touch light gyro peer pair_link assets faceclaw"
 	if chains; then TESTS="$TESTS chain chain_right"; else echo "$NOCHAIN"; fi
 elif [ "$1" = all ]; then
 	TESTS=$("$PY" -I -c "import sys; sys.path.insert(0, '$FW/emulator/tests'); import v5_tests; print(' '.join(v5_tests.TESTS))")

@@ -314,7 +314,7 @@ static void setup(int safe)
 	npool = 0;
 }
 
-static uint32_t getw(uint32_t i)
+static uint32_t pool_getw(uint32_t i)
 {
 	return get32(arena + 4 * i);
 }
@@ -328,7 +328,7 @@ static void setw(uint32_t i, uint32_t v)
 static int K(uint32_t v)
 {
 	for (int i = 0; i < npool; i++) {
-		if (getw(POOL + (uint32_t)i) == v) {
+		if (pool_getw(POOL + (uint32_t)i) == v) {
 			return POOL + i;
 		}
 	}
@@ -883,11 +883,11 @@ static void test_encoding(void)
 	setw(0x120, 7);
 	send(add, sizeof(add));
 	run();
-	CHECK_EQ(getw(3), 12);
+	CHECK_EQ(pool_getw(3), 12);
 	setw(0xFFFF, 0x10);
 	send(add_esc, sizeof(add_esc));
 	run();
-	CHECK_EQ(getw(3), 0x15);
+	CHECK_EQ(pool_getw(3), 0x15);
 	CHECK_EQ(f.nev, 0);
 	CHECK_EQ(f.head, 2);
 	CHECK_EQ(vm.stats.packets, 2);
@@ -942,7 +942,7 @@ static void test_alu(void)
 				I(&c, (uint8_t)op, 300, K(vals[i]), K(vals[j]));
 				send_code(&c);
 				run();
-				CHECK_EQ(getw(300), ref_alu(op, vals[i], vals[j]));
+				CHECK_EQ(pool_getw(300), ref_alu(op, vals[i], vals[j]));
 			}
 		}
 	}
@@ -955,8 +955,8 @@ static void test_alu(void)
 			I(&c, MODS, 304, K(vals[i]), K(vals[j]));
 			send_code(&c);
 			run();
-			CHECK_EQ(getw(301) * vals[j] + getw(302), vals[i]);
-			CHECK_EQ(getw(303) * vals[j] + getw(304), vals[i]);
+			CHECK_EQ(pool_getw(301) * vals[j] + pool_getw(302), vals[i]);
+			CHECK_EQ(pool_getw(303) * vals[j] + pool_getw(304), vals[i]);
 		}
 	}
 	/* the destination is written after the sources are read */
@@ -969,9 +969,9 @@ static void test_alu(void)
 	I(&c, MOV, 4, 3);
 	send_code(&c);
 	run();
-	CHECK_EQ(getw(1), 42);
-	CHECK_EQ(getw(2), 2);
-	CHECK_EQ(getw(4), 7);
+	CHECK_EQ(pool_getw(1), 42);
+	CHECK_EQ(pool_getw(2), 2);
+	CHECK_EQ(pool_getw(4), 7);
 	CHECK_EQ(f.nev, 0);
 }
 
@@ -1023,7 +1023,7 @@ static void test_branches(void)
 					want = (int32_t)a >= (int32_t)b;
 					break;
 				}
-				CHECK_EQ(getw(400), want);
+				CHECK_EQ(pool_getw(400), want);
 			}
 		}
 	}
@@ -1051,17 +1051,17 @@ static void test_load_store(void)
 	I(&c, LD4, 5, K(0x3040), K(2));
 	send_code(&c);
 	run();
-	CHECK_EQ(getw(1), 0x44332211);
-	CHECK_EQ(getw(2), 0x4433);
-	CHECK_EQ(getw(3), 0x44);
+	CHECK_EQ(pool_getw(1), 0x44332211);
+	CHECK_EQ(pool_getw(2), 0x4433);
+	CHECK_EQ(pool_getw(3), 0x44);
 	CHECK_EQ(get32(arena + 0x3004), 0x1234);
 	CHECK_EQ(arena[0x3020], 0xFF);
 	CHECK_EQ(arena[0x3021], 0);
 	CHECK_EQ(get32(arena + 0x3025), 0xDEADBEEF);
 	CHECK_EQ(arena[0x3040], 0xAB);
 	CHECK_EQ(arena[0x3041], 0x07);
-	CHECK_EQ(getw(4), 0xB);
-	CHECK_EQ(getw(5), 0);
+	CHECK_EQ(pool_getw(4), 0xB);
+	CHECK_EQ(pool_getw(5), 0);
 	CHECK_EQ(f.nev, 0);
 	/* pixel (x, y) of a 4-bpp bitmap at B, stride s, is LD4 element 2·s·y + x of B */
 	CHECK_EQ(vm_fill(arena, v, &detail), 0);
@@ -1070,8 +1070,8 @@ static void test_load_store(void)
 	I(&c, LD4, 7, K(0x4000), K(2 * 10 * 2 + 4));
 	send_code(&c);
 	run();
-	CHECK_EQ(getw(6), 9);
-	CHECK_EQ(getw(7), 0);
+	CHECK_EQ(pool_getw(6), 9);
+	CHECK_EQ(pool_getw(7), 0);
 	/* the last element fits; one more is error 3 with its address, and changes nothing */
 	put32(arena + VM_ARENA_SIZE - 4, 0x5A5A5A5A);
 	c.n = 0;
@@ -1079,7 +1079,7 @@ static void test_load_store(void)
 	I(&c, ST4, K(VM_ARENA_SIZE - 1), K(1), K(3));
 	send_code(&c);
 	run();
-	CHECK_EQ(getw(8), 0x5A5A5A5A);
+	CHECK_EQ(pool_getw(8), 0x5A5A5A5A);
 	CHECK_EQ(arena[VM_ARENA_SIZE - 1], 0x53);
 	CHECK_EQ(f.nev, 0);
 	setw(8, 77);
@@ -1088,7 +1088,7 @@ static void test_load_store(void)
 	send_code(&c);
 	run();
 	EXPECT_ERROR(3, LD32, 0, VM_ARENA_SIZE, 0);
-	CHECK_EQ(getw(8), 77);
+	CHECK_EQ(pool_getw(8), 77);
 	c.n = 0;
 	I(&c, LD32, 8, K(0xFFFFFFF0), K(4));
 	send_code(&c);
@@ -1110,7 +1110,7 @@ static void test_load_store(void)
 	run();
 	EXPECT_ERROR(3, ST8, 0, 0xF, 0);
 	CHECK_EQ(arena[0xF], 0);
-	CHECK_EQ(getw(8), 77);
+	CHECK_EQ(pool_getw(8), 77);
 }
 
 static void test_memory(void)
@@ -1342,7 +1342,7 @@ static void test_host_call(void)
 	W(&p, 0x600, &one, 1);
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(1), 2);
+	CHECK_EQ(pool_getw(1), 2);
 	CHECK_EQ(arena[0x600], 0x5A);
 	CHECK_EQ(f.nev, 0);
 	/* END in called code ends the packet without an error */
@@ -1371,7 +1371,7 @@ static void test_host_call(void)
 	send_code(&p);
 	run();
 	EXPECT_ERROR(2, WAIT_EVENT, 6, 0, 0x8205);
-	CHECK_EQ(getw(1), 3);
+	CHECK_EQ(pool_getw(1), 3);
 	p.n = 0;
 	J(&p, CALL, 0x8280);
 	send_code(&p);
@@ -1439,8 +1439,8 @@ static void test_host_call(void)
 	J(&p, CALL, 0x8700);
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(310), 0xFF);
-	CHECK_EQ(getw(311), 1);
+	CHECK_EQ(pool_getw(310), 0xFF);
+	CHECK_EQ(pool_getw(311), 1);
 	CHECK_EQ(f.nev, 0);
 	/* a CALL target outside the arena fails in the packet */
 	p.n = 0;
@@ -1474,7 +1474,7 @@ static void test_program(void)
 		CHECK_EQ(get32(e->body + 3), 7);
 		CHECK_EQ(get32(e->body + 7), 8);
 	}
-	CHECK_EQ(getw(320), 0);
+	CHECK_EQ(pool_getw(320), 0);
 	I(&p, NOTIFY, K(1), K(2));
 	send_code(&p);
 	run();
@@ -1502,7 +1502,7 @@ static void test_program(void)
 	send_code(&p);
 	run();
 	EXPECT_HALT(12, 0x9109, HALT, 0, 0);
-	CHECK_EQ(getw(321), 1);
+	CHECK_EQ(pool_getw(321), 1);
 	vm_status(&vm, s);
 	CHECK_EQ(s[0], VM_HALTED);
 	CHECK_EQ(get32(s + 8), 0x9109);
@@ -1572,7 +1572,7 @@ static void test_program(void)
 		f.nev = 0;
 		vm_start(&vm, 0x40);
 		run();
-		CHECK_EQ(getw(1), 1001);
+		CHECK_EQ(pool_getw(1), 1001);
 		if (limit == 1001) {
 			CHECK_EQ(count(VM_EV_HALT), 0);
 		} else {
@@ -1601,10 +1601,10 @@ static void test_program(void)
 		run_for(100);
 		if (past) {
 			EXPECT_HALT(0, br, BNE, 10, 0);
-			CHECK_EQ(getw(1), 1002);
+			CHECK_EQ(pool_getw(1), 1002);
 		} else {
 			CHECK_EQ(count(VM_EV_HALT), 0);
-			CHECK_EQ(getw(1), 1200);
+			CHECK_EQ(pool_getw(1), 1200);
 		}
 	}
 	/* a WAIT_EVENT that is satisfied at once does not start the budget again */
@@ -1625,7 +1625,7 @@ static void test_program(void)
 	vm_start(&vm, 0x40);
 	run();
 	EXPECT_HALT(0, br, BNE, 10, 0);
-	CHECK_EQ(getw(3), 14);
+	CHECK_EQ(pool_getw(3), 14);
 	/* jump targets and handlers outside the arena, the arena's end, zeroed memory */
 	c.n = 0;
 	I(&c, ADD, 1, 1, K(1));
@@ -1696,11 +1696,11 @@ static void test_triggers(void)
 	CHECK_EQ(s[28], 1);
 	CHECK_EQ(get32(s + 16), t0 + 1000);
 	run_for(999);
-	CHECK_EQ(getw(341), 0);
+	CHECK_EQ(pool_getw(341), 0);
 	run_for(1);
-	CHECK_EQ(getw(341), 1);
+	CHECK_EQ(pool_getw(341), 1);
 	run_for(100000);
-	CHECK_EQ(getw(341), 1);
+	CHECK_EQ(pool_getw(341), 1);
 	vm_status(&vm, s);
 	CHECK_EQ(s[28], 0);
 	CHECK(vm_prop(&vm, VM_P_TIMER, &v) == 0 && v == t0 + 1000);
@@ -1709,24 +1709,24 @@ static void test_triggers(void)
 	I(&p, SYS_WRITE, K(VM_P_TIMER), K(f.t + 2000));
 	send_code(&p);
 	run_for(1000);
-	CHECK_EQ(getw(341), 1);
+	CHECK_EQ(pool_getw(341), 1);
 	run_for(1000);
-	CHECK_EQ(getw(341), 2);
+	CHECK_EQ(pool_getw(341), 2);
 	p.n = 0;
 	I(&p, SYS_WRITE, K(VM_P_TIMER), K(f.t - 5));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(341), 3);
+	CHECK_EQ(pool_getw(341), 3);
 	p.n = 0;
 	I(&p, SYS_WRITE, K(VM_P_TIMER), K(f.t + 0x80000000u));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(341), 4);
+	CHECK_EQ(pool_getw(341), 4);
 	p.n = 0;
 	I(&p, SYS_WRITE, K(VM_P_TIMER), K(f.t + 0x7FFFFFFFu));
 	send_code(&p);
 	run_for(100000);
-	CHECK_EQ(getw(341), 4);
+	CHECK_EQ(pool_getw(341), 4);
 	/* one pending bit per trigger, repeats coalesce, the lowest ID runs first */
 	log_handler(0xA200);
 	table(12, 0xA200);
@@ -1742,8 +1742,8 @@ static void test_triggers(void)
 	I(&p, SYS_READ, 345, K(VM_P_PENDING));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(345), 0x3000);
-	CHECK_EQ(getw(344), 2);
+	CHECK_EQ(pool_getw(345), 0x3000);
+	CHECK_EQ(pool_getw(344), 2);
 	CHECK_EQ(arena[0x700], 12);
 	CHECK_EQ(arena[0x701], 13);
 	vm_status(&vm, s);
@@ -1764,8 +1764,8 @@ static void test_triggers(void)
 	I(&p, RAISE, K(12));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(346), 14);
-	CHECK_EQ(getw(347), 1);
+	CHECK_EQ(pool_getw(346), 14);
+	CHECK_EQ(pool_getw(347), 1);
 	vm_status(&vm, s);
 	CHECK_EQ(get16(s + 2), 0);
 	/* a waiting task gets a trigger of its mask; other triggers wait for their handlers */
@@ -1779,16 +1779,16 @@ static void test_triggers(void)
 	I(&p, RAISE, K(13));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(344), 0);
+	CHECK_EQ(pool_getw(344), 0);
 	vm_status(&vm, s);
 	CHECK_EQ(get16(s + 2), 0x2000);
 	p.n = 0;
 	I(&p, RAISE, K(15));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(346), 15);
-	CHECK_EQ(getw(347), 2);
-	CHECK_EQ(getw(344), 1);
+	CHECK_EQ(pool_getw(346), 15);
+	CHECK_EQ(pool_getw(347), 2);
+	CHECK_EQ(pool_getw(344), 1);
 	CHECK_EQ(arena[0x700], 13);
 	/* WAIT_EVENT masks 0 and above bit 15 are error 5 */
 	c.n = 0;
@@ -1844,7 +1844,7 @@ static void test_triggers(void)
 	run();
 	f.fired = 1 << VM_T_MOTION;
 	run();
-	CHECK_EQ(getw(348), 1);
+	CHECK_EQ(pool_getw(348), 1);
 	cur[0] = 6, cur[1] = 1008, cur[2] = 0;
 	CHECK_EQ(vm_moved(prev, cur, 10), 0);
 	cur[0] = 7;
@@ -1875,17 +1875,17 @@ static void test_triggers(void)
 	run();
 	f.props[VM_P_PITCH] = 30;
 	run();
-	CHECK_EQ(getw(350), 1);
+	CHECK_EQ(pool_getw(350), 1);
 	run();
-	CHECK_EQ(getw(350), 1);
+	CHECK_EQ(pool_getw(350), 1);
 	f.props[VM_P_PITCH] = 10;
 	run();
-	CHECK_EQ(getw(350), 2);
+	CHECK_EQ(pool_getw(350), 2);
 	f.props[VM_P_PITCH] = VM_UNKNOWN;
 	run();
 	f.props[VM_P_PITCH] = 10;
 	run();
-	CHECK_EQ(getw(350), 2);
+	CHECK_EQ(pool_getw(350), 2);
 	/* a range is evaluated when the executor goes idle, not between instructions */
 	counter_handler(0xA700, 351);
 	table(VM_T_TILT, 0xA700);
@@ -1894,13 +1894,13 @@ static void test_triggers(void)
 	I(&p, SYS_WRITE, K(VM_P_PITCH_HI), K(20));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(351), 0);
+	CHECK_EQ(pool_getw(351), 0);
 	p.n = 0;
 	I(&p, SYS_WRITE, K(VM_P_PITCH_LO), K(12));
 	I(&p, SYS_WRITE, K(VM_P_PITCH_LO), K(3));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(351), 0);
+	CHECK_EQ(pool_getw(351), 0);
 	p.n = 0;
 	I(&p, SYS_WRITE, K(VM_P_PITCH_LO), K(12));
 	send_code(&p);
@@ -1908,7 +1908,7 @@ static void test_triggers(void)
 	I(&p, SYS_WRITE, K(VM_P_PITCH_LO), K(3));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(351), 1);
+	CHECK_EQ(pool_getw(351), 1);
 	/* LIGHT: unsigned range */
 	counter_handler(0xA800, 352);
 	table(VM_T_LIGHT, 0xA800);
@@ -1918,15 +1918,15 @@ static void test_triggers(void)
 	run();
 	f.props[VM_P_LIGHT] = 50;
 	run();
-	CHECK_EQ(getw(352), 1);
+	CHECK_EQ(pool_getw(352), 1);
 	f.props[VM_P_LIGHT] = 500;
 	run();
 	f.props[VM_P_LIGHT] = 0x90000000;
 	run();
-	CHECK_EQ(getw(352), 1);
+	CHECK_EQ(pool_getw(352), 1);
 	f.props[VM_P_LIGHT] = 50;
 	run();
-	CHECK_EQ(getw(352), 2);
+	CHECK_EQ(pool_getw(352), 2);
 	/* BATTERY, CASE, WEAR fire on changes while the program runs, from a baseline at VM_START */
 	counter_handler(0xA900, 353);
 	counter_handler(0xA980, 354);
@@ -1936,40 +1936,40 @@ static void test_triggers(void)
 	table(VM_T_WEAR, 0xAA00);
 	f.props[VM_P_BATT_PCT] = 49;
 	run();
-	CHECK_EQ(getw(353), 1);
+	CHECK_EQ(pool_getw(353), 1);
 	f.props[VM_P_CHARGE] = 1;
 	run();
 	run();
-	CHECK_EQ(getw(353), 2);
+	CHECK_EQ(pool_getw(353), 2);
 	f.props[VM_P_IN_CASE] = 1;
 	f.props[VM_P_WORN] = 1;
 	run();
-	CHECK_EQ(getw(354), 1);
-	CHECK_EQ(getw(355), 1);
+	CHECK_EQ(pool_getw(354), 1);
+	CHECK_EQ(pool_getw(355), 1);
 	f.props[VM_P_CASE_LID] = 0;
 	run();
-	CHECK_EQ(getw(354), 2);
+	CHECK_EQ(pool_getw(354), 2);
 	f.props[VM_P_CASE_CHARGING] = 1;
 	f.props[VM_P_CASE_BATT_PCT] = 80;
 	run();
-	CHECK_EQ(getw(354), 3);
+	CHECK_EQ(pool_getw(354), 3);
 	f.props[VM_P_CASE_BATT_PCT] = 79;
 	run();
-	CHECK_EQ(getw(354), 4);
+	CHECK_EQ(pool_getw(354), 4);
 	f.props[VM_P_CASE_LID] = VM_UNKNOWN;
 	f.props[VM_P_CASE_CHARGING] = VM_UNKNOWN;
 	f.props[VM_P_CASE_BATT_PCT] = VM_UNKNOWN;
 	run();
 	run();
-	CHECK_EQ(getw(354), 5);
-	CHECK_EQ(getw(353), 2);
-	CHECK_EQ(getw(355), 1);
+	CHECK_EQ(pool_getw(354), 5);
+	CHECK_EQ(pool_getw(353), 2);
+	CHECK_EQ(pool_getw(355), 1);
 	vm_stop(&vm);
 	f.props[VM_P_BATT_PCT] = 30;
 	run();
 	vm_start(&vm, 0x40);
 	run();
-	CHECK_EQ(getw(353), 2);
+	CHECK_EQ(pool_getw(353), 2);
 	CHECK_EQ(count(VM_EV_HALT), 2);
 }
 
@@ -2122,20 +2122,20 @@ static void test_input(void)
 	run();
 	CHECK_EQ(count(VM_EV_INPUT), 10);
 	run_for(6000);
-	CHECK_EQ(getw(360), 1);
+	CHECK_EQ(pool_getw(360), 1);
 	EXPECT_INPUT(10, 11, VM_T_TIMER, 0);
 	p.n = 0;
 	I(&p, RAISE, K(12));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(361), 1);
+	CHECK_EQ(pool_getw(361), 1);
 	EXPECT_INPUT(11, 12, 12, 0);
 	/* with a program, a sensor change is reported once, and the program's trigger fires too */
 	counter_handler(0xA300, 363);
 	table(VM_T_BATTERY, 0xA300);
 	f.props[VM_P_BATT_PCT] = 60;
 	run();
-	CHECK_EQ(getw(363), 1);
+	CHECK_EQ(pool_getw(363), 1);
 	EXPECT_INPUT(12, 13, VM_T_BATTERY, 60);
 	CHECK_EQ(count(VM_EV_INPUT), 13);
 	/* a dropped event still counts; RESET_SESSION restarts the count; mask 0 stops reports */
@@ -2204,7 +2204,7 @@ static void test_cap(void)
 	I(&p, RAISE, K(12));
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(360), 1);
+	CHECK_EQ(pool_getw(360), 1);
 	vm_status(&vm, s);
 	CHECK_EQ(get16(s + 29), 0);
 	/* a DRAW's time beyond the cap is charged to the next periods: ~30 % of the time drawing */
@@ -2240,32 +2240,32 @@ static void test_host_first(void)
 	vm_start(&vm, 0x40);
 	f.yield_at = (uint32_t)vm.stats.instructions + 10;
 	run();
-	k = getw(1);
+	k = pool_getw(1);
 	CHECK(k > 0 && k < 100);
 	f.yield_at = 0;
 	I(&p, MOV, 360, 1);
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(360), k);
-	CHECK_EQ(getw(1), 100);
+	CHECK_EQ(pool_getw(360), k);
+	CHECK_EQ(pool_getw(1), 100);
 	/* while a packet sleeps no program instruction runs */
 	setw(1, 0);
 	vm_start(&vm, 0x40);
 	f.yield_at = (uint32_t)vm.stats.instructions + 20;
 	run();
-	k = getw(1);
+	k = pool_getw(1);
 	f.yield_at = 0;
 	p.n = 0;
 	I(&p, SLEEP_UNTIL, K(f.t + 5000));
 	I(&p, MOV, 361, 1);
 	send_code(&p);
 	run();
-	CHECK_EQ(getw(1), k);
+	CHECK_EQ(pool_getw(1), k);
 	run_for(4999);
-	CHECK_EQ(getw(1), k);
+	CHECK_EQ(pool_getw(1), k);
 	run_for(1);
-	CHECK_EQ(getw(361), k);
-	CHECK_EQ(getw(1), 100);
+	CHECK_EQ(pool_getw(361), k);
+	CHECK_EQ(pool_getw(1), 100);
 	/* a host SLEEP_UNTIL already past counts as late */
 	p.n = 0;
 	I(&p, SLEEP_UNTIL, K(f.t - 1));
@@ -2279,9 +2279,9 @@ static void test_host_first(void)
 	I(&p, MOV, 362, K(5));
 	send_code(&p);
 	run_for(1999999);
-	CHECK_EQ(getw(362), 0);
+	CHECK_EQ(pool_getw(362), 0);
 	run_for(1);
-	CHECK_EQ(getw(362), 5);
+	CHECK_EQ(pool_getw(362), 5);
 }
 
 static void test_status(void)
@@ -2370,20 +2370,20 @@ static void test_props(void)
 	I(&c, SYS_READ, 388, K(VM_P_CASE_LID));
 	send_code(&c);
 	run();
-	CHECK_EQ(getw(387), 64);
-	CHECK_EQ(getw(388), VM_UNKNOWN);
-	CHECK_EQ(getw(370), f.t);
-	CHECK_EQ(getw(371), 0xFF);
-	CHECK_EQ(getw(372), 0);
-	CHECK_EQ(getw(373), 7500);
-	CHECK_EQ(getw(374), (uint32_t)-7);
-	CHECK_EQ(getw(375), 251);
-	CHECK_EQ(getw(376), VM_UNKNOWN);
-	CHECK_EQ(getw(377), 21);
-	CHECK_EQ(getw(378), (uint32_t)-90);
-	CHECK_EQ(getw(379), 0xFFFFFFFF);
-	CHECK_EQ(getw(380), 13);
-	CHECK_EQ(getw(381), 0);
+	CHECK_EQ(pool_getw(387), 64);
+	CHECK_EQ(pool_getw(388), VM_UNKNOWN);
+	CHECK_EQ(pool_getw(370), f.t);
+	CHECK_EQ(pool_getw(371), 0xFF);
+	CHECK_EQ(pool_getw(372), 0);
+	CHECK_EQ(pool_getw(373), 7500);
+	CHECK_EQ(pool_getw(374), (uint32_t)-7);
+	CHECK_EQ(pool_getw(375), 251);
+	CHECK_EQ(pool_getw(376), VM_UNKNOWN);
+	CHECK_EQ(pool_getw(377), 21);
+	CHECK_EQ(pool_getw(378), (uint32_t)-90);
+	CHECK_EQ(pool_getw(379), 0xFFFFFFFF);
+	CHECK_EQ(pool_getw(380), 13);
+	CHECK_EQ(pool_getw(381), 0);
 	CHECK_EQ(f.nev, 0);
 	for (unsigned i = 0; i < sizeof(unknown) / 4; i++) {
 		c.n = 0;
@@ -2412,7 +2412,7 @@ static void test_props(void)
 		I(&c, SYS_WRITE, K(later[i]), K(0));
 		send_code(&c);
 		run();
-		CHECK_EQ(getw(389), VM_UNKNOWN);
+		CHECK_EQ(pool_getw(389), VM_UNKNOWN);
 		EXPECT_ERROR(5, SYS_WRITE, 6, later[i], 0);
 	}
 	c.n = 0;
@@ -2507,10 +2507,10 @@ static void test_props(void)
 	I(&c, SYS_READ, 386, K(VM_P_LIGHT_HI));
 	send_code(&c);
 	run();
-	CHECK_EQ(getw(383), 123);
-	CHECK_EQ(getw(384), 45);
-	CHECK_EQ(getw(385), 7);
-	CHECK_EQ(getw(386), 8);
+	CHECK_EQ(pool_getw(383), 123);
+	CHECK_EQ(pool_getw(384), 45);
+	CHECK_EQ(pool_getw(385), 7);
+	CHECK_EQ(pool_getw(386), 8);
 	CHECK(vm_prop(&vm, VM_P_TRIGGER, &v) == 0 && v == 0xFF);
 	CHECK(vm_prop(&vm, VM_P_BATT_MV, &v) == 0 && v == 3900);
 }
@@ -3426,8 +3426,8 @@ static void test_clock(void)
 	CHECK_EQ(f.nev, 0);
 	CHECK_EQ(vm.stats.jumps - j0, 1);
 	CHECK_EQ(memcmp(arena + 0x100, "\x01\x02\x40\x03\x04", 5), 0);
-	CHECK_EQ(getw(68), 754);
-	CHECK_EQ(getw(69), n1);
+	CHECK_EQ(pool_getw(68), 754);
+	CHECK_EQ(pool_getw(69), n1);
 	CHECK_EQ(f.begins, 1);
 	CHECK(f.bx == 240 && f.by == 8 && f.bw == 160 && f.bh == 32);
 	CHECK(vm_prop(&vm, VM_P_TIMER, &len) == 0 && len == n1);
@@ -3559,8 +3559,8 @@ static void test_number(void)
 		send_code(&p);
 		run();
 		CHECK_EQ(vm.stats.jumps - j0, digits - 1);
-		CHECK_EQ(getw(4), digits);
-		CHECK_EQ(getw(3), 0x6000 + 10 - digits);
+		CHECK_EQ(pool_getw(4), digits);
+		CHECK_EQ(pool_getw(3), 0x6000 + 10 - digits);
 		for (uint32_t k = 0; k < digits; k++) {
 			CHECK_EQ(arena[0x6000 + 10 - digits + k], txt[k] - '0');
 		}
@@ -3572,7 +3572,7 @@ static void test_number(void)
 		b[10] = 2;
 		b[11] = 15;
 		b[12] = (uint8_t)digits;
-		memcpy(b + 13, arena + getw(3), digits);
+		memcpy(b + 13, arena + pool_getw(3), digits);
 		CHECK_EQ(v4_glyph_run(b), 0);
 		CHECK_EQ(memcmp(arena + 0x7000, a4 + 0x7000, 100 * 30), 0);
 	}
@@ -3610,7 +3610,7 @@ static void test_reset(void)
 	CHECK(f.head != f.tail);
 	f.head = f.tail;
 	run_for(2000000);
-	CHECK_EQ(getw(390), 0);
+	CHECK_EQ(pool_getw(390), 0);
 	c.n = 0;
 	I(&c, NOTIFY, K(0), K(0));
 	send_code(&c);
