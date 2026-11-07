@@ -127,6 +127,17 @@ Updating to a newer g1v0 later is the same command without `--stock` (the addres
 `python3 flash.py --ble NEW_LEFT_ADDR install IMAGE`. g1v0 accepts an update out of the case only from a
 bonded host; in the case from anyone.
 
+`-c` does both arms in one run, in place of `--ble`. It takes a connection string, or the path of a file holding one:
+```
+python3 flash.py -c 'g1://local?left=LEFT_ADDR&right=RIGHT_ADDR' install IMAGE
+```
+Both arms must be advertising before either is touched. The left arm goes first, each arm asks for its own `yes`, and
+a failure stops the run (`--side R` then goes on with the right arm alone). `list`, `restore` and `--stock` work the
+same way. If an install moves an arm to another address (an update across 0.5.66, a restore), the tool prints the new
+string. macOS hides Bluetooth addresses, so there a MAC is matched by the arm's name, which ends in the address's low
+three bytes; `G1v0_L` and `G1v0_R` (before 0.5.66) have no address in the name, so they are taken only if a single
+arm on that side is advertising, and the tool says so.
+
 ## Restore Even's firmware
 
 ```
