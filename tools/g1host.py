@@ -36,6 +36,7 @@ UUIDS = {
     "G1_EVT": "f3da4d59-277a-4fc9-a1ed-41c9c22d4403",
     "G1_PAIR": "f3da4d59-277a-4fc9-a1ed-41c9c22d4404",
     "G1_FC": "f3da4d59-277a-4fc9-a1ed-41c9c22d4405",
+    "G1_ANCS": "f3da4d59-277a-4fc9-a1ed-41c9c22d4406",
     "SMP": "da2e7828-fbce-4e01-ae9e-261174997c48",
     "NUS_RX": "6e400002-b5a3-f393-e0a9-e50e24dcca9e",
     "NUS_TX": "6e400003-b5a3-f393-e0a9-e50e24dcca9e",
@@ -130,6 +131,10 @@ class EmuTransport:
 
     def go_silent(self, ms):
         self.pending.append(f"D {ms}")
+
+    def phone_ancs(self, *words):
+        """The virtual phone's ANCS: on, off, error HEX, ns HEX, ds HEX (G1_VirtualPhone.cs)."""
+        self.pending.append("A " + " ".join(words))
 
     def reset_machine(self):
         self.pending.append("Z")
@@ -967,12 +972,15 @@ def ad_structures(payload):
 
 def pair_record(data):
     """The pair record: manufacturer data for company 0xFFFF without the company bytes (as bleak and
-    BlueZ present it). None if it is not a format-1 record."""
-    if len(data) < 3 or data[0] != 1:
+    BlueZ present it). None if it is not a record of format 1 (before 0.5.66) or 2 (version, safe mode)."""
+    if len(data) < 3 or data[0] not in (1, 2) or (data[0] == 2 and len(data) < 6):
         return None
     fl = data[1]
-    return dict(role="LR"[0 if fl & 1 else 1], no_panel=bool(fl & 2), from_serial=bool(fl & 4),
-                pair_id=bytes(data[2:]).decode("ascii", "replace"))
+    rec = dict(role="LR"[0 if fl & 1 else 1], no_panel=bool(fl & 2), from_serial=bool(fl & 4))
+    if data[0] == 2:
+        rec.update(safe_mode=bool(fl & 8), version=f"{data[2]}.{data[3]}.{data[4]}")
+    rec["pair_id"] = bytes(data[5 if data[0] == 2 else 2:]).decode("ascii", "replace")
+    return rec
 
 
 STATUS_FMT = "<HHBBBBBIIHIHHHHHHHBHII"
@@ -1043,7 +1051,9 @@ class Arm:
         self._resyncing = False
         self.name = name
         self.log = log or (lambda s: print(s, flush=True))
-        self.listeners = {"G1_EVT": self._on_evt}
+        self.listeners = {"G1_EVT": self._on_evt, "G1_ANCS": lambda d, _t: self.ancs_frames.append(d)}
+        self.ancs_frames = []   # G1_ANCS notifications (VM.md §6.12), as they came
+        self.phone_log = []     # emulator: what the virtual phone saw of the arm's GATT client, and ATT errors it got
         self.fc_acks = []
         self.smp = Smp(self)
         self.epoch = None
@@ -1115,6 +1125,8 @@ class Arm:
             elif name.startswith(("adv ", "scanrsp ")):
                 kind, _, hexdata = name.partition(" ")
                 self.adv[kind] = bytes.fromhex(hexdata)
+            elif name.startswith(("ancs ", "att-error ")):
+                self.phone_log.append(name)
             else:
                 self.link_events.append((name.split(" ")[0], t))
                 self.log(f"[{self.name}] {t:9.3f}s link {name}")
@@ -1230,7 +1242,7 @@ class Arm:
                     flags=fl, safe_mode=bool(fl & 1), panel_ok=bool(fl & 2), pmic_ok=bool(fl & 4),
                     panel_on=bool(fl & 8), charging=bool(fl & 16), test_build=bool(fl & 32),
                     encrypted=bool(fl & 64), in_case=bool(fl & 128),
-                    board=bd, no_panel=bool(bd & 1), bondable=bool(bd & 2), mic=bool(bd & 4),
+                    board=bd, no_panel=bool(bd & 1), bondable=bool(bd & 2), mic=bool(bd & 4), ancs=bool(bd & 8),
                     triggers=f["triggers"], trigger_names=[v for b, v in TRIGGERS.items() if f["triggers"] >> b & 1],
                     panel=(f["panel_w"], f["panel_h"]), arena=f["arena"], queue=f["queue"],
                     max_pkt=f["max_pkt"], rx_next=f["rx_next"], exec_next=f["exec_next"],

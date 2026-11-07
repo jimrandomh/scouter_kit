@@ -75,7 +75,7 @@ class SettingsActivity : Activity() {
         button("Pair glasses (in the open case)") { startActivity(Intent(this, PairingActivity::class.java)) }
         button("Use the bonded glasses") {
             val arms = bondedArms()
-            if (arms == null) glassesState.text = "no bonded G1v0_L and G1v0_R: pair them in the open case"
+            if (arms == null) glassesState.text = "no bonded G1CFW_L_… and G1CFW_R_…: pair them in the open case"
             else {
                 settings.left = arms.first
                 settings.right = arms.second
@@ -191,8 +191,8 @@ class SettingsActivity : Activity() {
     private fun bondedArms(): Pair<String, String>? {
         if (!ScouterService.bluetooth(this)) return null
         val bonded = getSystemService(android.bluetooth.BluetoothManager::class.java).adapter.bondedDevices
-        val left = bonded.filter { it.name == "G1v0_L" }
-        val right = bonded.filter { it.name == "G1v0_R" }
+        val left = bonded.filter { it.name?.startsWith("G1CFW_L_") == true || it.name == "G1v0_L" }
+        val right = bonded.filter { it.name?.startsWith("G1CFW_R_") == true || it.name == "G1v0_R" }
         return if (left.size == 1 && right.size == 1) left[0].address to right[0].address else null
     }
 

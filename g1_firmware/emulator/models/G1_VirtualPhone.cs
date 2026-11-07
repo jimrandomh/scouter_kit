@@ -39,7 +39,13 @@
 //                   C <peripheral> <method> [arg]       (call a model method, e.g. DumpFrame)
 //                   M <hex address> <hex length> <path>  (save a bus memory range to a file)
 //                   Z                            (machine reset)
+//                   A on|off | error <hex> | ns <hex> | ds <hex>   (the phone's ANCS, below)
 //                   G                            (go: continue the emulation)
+//
+// ANCS (VM.md §6.12): the GATT server of an iPhone that shares its notifications, for the relay's GATT client. Off, it is
+// a phone without ANCS. `error` makes writes to the Control Point fail with that ATT error (0: they succeed); `ns` and `ds`
+// send a notification whether subscribed or not, so that a test sees what the arm does with one it didn't ask for. The
+// host hears what the arm does as link events: `ancs request <op>`, `ancs ccc ns|ds <value>`, `ancs cp <hex>`.
 //
 using System;
 using System.Collections.Generic;
@@ -281,6 +287,9 @@ namespace Antmicro.Renode.Peripherals.Wireless
             case "Z":
                 this.Log(LogLevel.Info, "vphone: machine reset requested by the bridge host");
                 machine.RequestReset();
+                break;
+            case "A":
+                AncsCommand(parts);
                 break;
             default:
                 this.Log(LogLevel.Warning, "vphone: unknown bridge command {0}", line);
@@ -701,6 +710,10 @@ namespace Antmicro.Renode.Peripherals.Wireless
         private void HandleAtt(byte[] a)
         {
             var op = a[0];
+            if(AncsRequest(a))
+            {
+                return;
+            }
             switch(op)
             {
             case 0x02:
@@ -772,7 +785,163 @@ namespace Antmicro.Renode.Peripherals.Wireless
                 else
                 {
                     this.Log(LogLevel.Warning, "vphone: ATT error {0}", Hex(a));
+                    bridgeLinkEvents.Add($"att-error {Hex(a)}");
                 }
+            }
+        }
+
+        // ---------------- the phone's ANCS ----------------
+
+        private static readonly int AncsService = 0x0100, AncsNsDecl = 0x0101, AncsNs = 0x0102, AncsNsCcc = 0x0103, AncsCpDecl = 0x0104,
+            AncsCp = 0x0105, AncsDsDecl = 0x0106, AncsDs = 0x0107, AncsDsCcc = 0x0108;
+        private static readonly byte[] AncsServiceUuid = LittleEndianUuid("7905F431B5CE4E99A40F4B1E122D00D0");
+        private static readonly byte[] AncsNsUuid = LittleEndianUuid("9FBF120D630142D98C5825E699A21DBD");
+        private static readonly byte[] AncsCpUuid = LittleEndianUuid("69D1D8F345E149A898219BBDFDAAD9D9");
+        private static readonly byte[] AncsDsUuid = LittleEndianUuid("22EAC6E924D64BB5BE44B36ACE7C7BFB");
+
+        private static byte[] LittleEndianUuid(string hex)
+        {
+            return ParseHex(hex).Reverse().ToArray();
+        }
+
+        private void AncsCommand(string[] parts)
+        {
+            switch(parts[1])
+            {
+            case "on":
+                ancsOn = true;
+                break;
+            case "off":
+                ancsOn = false;
+                break;
+            case "error":
+                ancsCpError = Convert.ToByte(parts[2], 16);
+                break;
+            case "ns":
+            case "ds":
+                var h = parts[1] == "ns" ? AncsNs : AncsDs;
+                QueueL2cap(4, new byte[] { 0x1B, (byte)h, (byte)(h >> 8) }.Concat(ParseHex(parts[2])).ToArray());
+                break;
+            }
+        }
+
+        private void AttError(byte op, int handle, byte code)
+        {
+            QueueL2cap(4, new byte[] { 0x01, op, (byte)handle, (byte)(handle >> 8), code });
+        }
+
+        // What the arm asks as a GATT client. True when answered here; with ANCS off every query fails, as on a phone without it.
+        private bool AncsRequest(byte[] a)
+        {
+            var op = a[0];
+            if(op != 0x04 && op != 0x06 && op != 0x08 && op != 0x12)
+            {
+                return false;
+            }
+            if(op != 0x12)
+            {
+                bridgeLinkEvents.Add($"ancs request {op:X2}");
+            }
+            var first = a.Length >= 3 ? a[1] | (a[2] << 8) : 0;
+            var last = a.Length >= 5 ? a[3] | (a[4] << 8) : 0;
+            switch(op)
+            {
+            case 0x06:
+                if(ancsOn && first <= AncsService && last >= AncsService && a.Length == 23 && (a[5] | (a[6] << 8)) == 0x2800
+                    && a.Skip(7).SequenceEqual(AncsServiceUuid))
+                {
+                    QueueL2cap(4, new byte[] { 0x07, (byte)AncsService, (byte)(AncsService >> 8), (byte)AncsDsCcc, (byte)(AncsDsCcc >> 8) });
+                }
+                else
+                {
+                    AttError(op, first, 0x0A);
+                }
+                return true;
+            case 0x08:
+                {
+                    var entries = new List<byte> { 0x09, 21 };
+                    var chars = new[] { Tuple.Create(AncsNsDecl, AncsNs, (byte)0x10, AncsNsUuid),
+                        Tuple.Create(AncsCpDecl, AncsCp, (byte)0x08, AncsCpUuid), Tuple.Create(AncsDsDecl, AncsDs, (byte)0x10, AncsDsUuid) };
+                    if(ancsOn && a.Length == 7 && (a[5] | (a[6] << 8)) == 0x2803)
+                    {
+                        foreach(var c in chars)
+                        {
+                            if(c.Item1 >= first && c.Item1 <= last && entries.Count + 21 <= attMtu)
+                            {
+                                entries.AddRange(new[] { (byte)c.Item1, (byte)(c.Item1 >> 8), c.Item3, (byte)c.Item2, (byte)(c.Item2 >> 8) });
+                                entries.AddRange(c.Item4);
+                            }
+                        }
+                    }
+                    if(entries.Count > 2)
+                    {
+                        QueueL2cap(4, entries.ToArray());
+                    }
+                    else
+                    {
+                        AttError(op, first, 0x0A);
+                    }
+                    return true;
+                }
+            case 0x04:
+                {
+                    // Runs of one UUID size, as the specification wants them.
+                    var attrs = new[] { Tuple.Create(AncsService, 0x2800, (byte[])null), Tuple.Create(AncsNsDecl, 0x2803, (byte[])null),
+                        Tuple.Create(AncsNs, 0, AncsNsUuid), Tuple.Create(AncsNsCcc, 0x2902, (byte[])null),
+                        Tuple.Create(AncsCpDecl, 0x2803, (byte[])null), Tuple.Create(AncsCp, 0, AncsCpUuid),
+                        Tuple.Create(AncsDsDecl, 0x2803, (byte[])null), Tuple.Create(AncsDs, 0, AncsDsUuid),
+                        Tuple.Create(AncsDsCcc, 0x2902, (byte[])null) };
+                    var inRange = ancsOn ? attrs.Where(x => x.Item1 >= first && x.Item1 <= last).ToArray() : new Tuple<int, int, byte[]>[0];
+                    if(inRange.Length == 0)
+                    {
+                        AttError(op, first, 0x0A);
+                        return true;
+                    }
+                    var wide = inRange[0].Item3 != null;
+                    var rsp = new List<byte> { 0x05, (byte)(wide ? 2 : 1) };
+                    foreach(var x in inRange)
+                    {
+                        var size = wide ? 18 : 4;
+                        if((x.Item3 != null) != wide || rsp.Count + size > attMtu)
+                        {
+                            break;
+                        }
+                        rsp.Add((byte)x.Item1);
+                        rsp.Add((byte)(x.Item1 >> 8));
+                        if(wide)
+                        {
+                            rsp.AddRange(x.Item3);
+                        }
+                        else
+                        {
+                            rsp.Add((byte)x.Item2);
+                            rsp.Add((byte)(x.Item2 >> 8));
+                        }
+                    }
+                    QueueL2cap(4, rsp.ToArray());
+                    return true;
+                }
+            default:
+                if(first == AncsNsCcc || first == AncsDsCcc)
+                {
+                    bridgeLinkEvents.Add($"ancs ccc {(first == AncsNsCcc ? "ns" : "ds")} {(a.Length > 3 ? a[3] : 0):X2}");
+                    QueueL2cap(4, new byte[] { 0x13 });
+                    return true;
+                }
+                if(first == AncsCp)
+                {
+                    bridgeLinkEvents.Add($"ancs cp {Hex(a.Skip(3))}");
+                    if(ancsCpError != 0)
+                    {
+                        AttError(op, first, ancsCpError);
+                    }
+                    else
+                    {
+                        QueueL2cap(4, new byte[] { 0x13 });
+                    }
+                    return true;
+                }
+                return false;
             }
         }
 
@@ -960,6 +1129,7 @@ namespace Antmicro.Renode.Peripherals.Wireless
             if(s == "f3da4d59277a4fc9a1ed41c9c22d4403") return "G1_EVT";
             if(s == "f3da4d59277a4fc9a1ed41c9c22d4404") return "G1_PAIR";
             if(s == "f3da4d59277a4fc9a1ed41c9c22d4405") return "G1_FC";
+            if(s == "f3da4d59277a4fc9a1ed41c9c22d4406") return "G1_ANCS";
             return null;
         }
 
@@ -1013,6 +1183,8 @@ namespace Antmicro.Renode.Peripherals.Wireless
         private double lastHeartbeat = -1e9;
         private int heartbeatSeq;
         private bool attPending;
+        private bool ancsOn;
+        private byte ancsCpError;
         private int discoverNext;
         private bool discoverDone;
         private readonly List<Tuple<int, int, string>> characteristics = new List<Tuple<int, int, string>>();

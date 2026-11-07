@@ -510,16 +510,24 @@ One GATT service; MCUmgr SMP (firmware update) runs beside it.
 | `EVT` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4403` | notify | events (§6.3) |
 | `PAIR` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4404` | read, write, encrypted link only (0.5.61+, write 0.5.62+) | read: u8 1; a write is ignored. Either makes a host whose stack pairs on demand (CoreBluetooth, Android) pair; the bondable rule below still decides |
 | `FC` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4405` | write, write without response (0.5.62+) | Faceclaw's records (§6.11) |
+| `ANCS` | `f3da4d59-277a-4fc9-a1ed-41c9c22d4406` | write, notify (0.5.65+) | the iPhone notification relay (§6.12) |
 
 - The host subscribes to `EVT`, exchanges the MTU (ATT MTU ≥ 65), then sends `HELLO`. A `CMD` packet is
   at most `max_packet` = min(MTU − 3, 244) bytes and a `CTRL` request at most 24 bytes. Write without
   response is the normal case; the protocol's acks make it reliable.
-- **Advertising** (no host connected): connectable, every 100–150 ms, with the service UUID and the name
-  `G1v0_L` or `G1v0_R` (`G1v0S_L`, `G1v0S_R` in safe mode). The scan response carries manufacturer data
-  for company 0xFFFF: u8 format = 1, u8 flags (bit 0 left arm, bit 1 board without a panel, bit 2 the
-  pair ID is the frame serial), then the pair ID in ASCII (1–16 bytes): the glasses' frame serial, the
-  same on both arms. A board without a serial sends its 64-bit device ID in hex, with bit 2 clear. A host
-  finds a pair by scanning actively and grouping arms by pair ID.
+- **Advertising** (no host connected): connectable, every 100–150 ms, with the name `G1CFW_L_XXXXXX` or
+  `G1CFW_R_XXXXXX`, its digits the low three bytes of the arm's address (0.5.66+; before: `G1v0_L`, `G1v0_R`,
+  `G1v0S_L`, `G1v0S_R` in safe mode, and the service UUID, which no longer fits). The scan response carries
+  manufacturer data for company 0xFFFF: u8 format = 2, u8 flags (bit 0 left arm, bit 1 board without a panel,
+  bit 2 the pair ID is the frame serial, bit 3 safe mode), three u8 the firmware's version as in `HELLO`, then the
+  pair ID in ASCII (1–16 bytes): the glasses' frame serial, the same on both arms. A board without a serial sends
+  its 64-bit device ID in hex, with bit 2 clear. A host finds a pair by scanning actively and grouping arms by pair
+  ID. Format 1, before 0.5.66, has no version and the pair ID right after the flags.
+- **Address** (0.5.66+): the one Even's firmware has, Zephyr's default identity. A bond made on either firmware
+  still works after an install in either direction, as far as that firmware kept its keys (Even's keeps one bond,
+  and may not read the records this one writes). Before 0.5.66: an address from the chip's device ID.
+- **Supervision timeout** (0.5.66+): under 2 s, the arm asks the central for 4 s at the same interval and latency, at
+  most 5 times per connection, 5 s apart; the central decides. `NOTICE` `LINK` reports what it does.
 - **Security**: in the charging case (`IN_CASE` = 1, §2.5: set by the case's power, field or messages and
   cleared by motion, wear or a 400 s silence, so a full arm lying in the case stays bondable and the rules
   end within 3 s of lifting the arm out; a case carried in a pocket may read 0 until its next re-check) the arm is bondable and obeys every write. Out of the case only a
@@ -655,7 +663,7 @@ Ops 0x09 and 0x3F are reserved for diagnostics and test builds. A firmware befor
 | 1 | u8 ×3 | firmware version: major, minor, patch |
 | 4 | u8 | role: 0 right arm, 1 left arm |
 | 5 | u8 | flags: bit 0 safe mode, 1 panel ok, 2 PMIC ok, 3 panel on, 4 charging enabled, 5 test build, 6 link encrypted, 7 in the case (`IN_CASE`, §2.5) |
-| 6 | u8 | board: bit 0 no panel (development board), bit 1 bondable now, bit 2 microphone: `MIC` 1 captures and streams `MIC_DATA` (a build without capture clears the bit and refuses `MIC` with 12; the indicator never shows without capture, except in a test build, flags bit 5) |
+| 6 | u8 | board: bit 0 no panel (development board), bit 1 bondable now, bit 2 microphone: `MIC` 1 captures and streams `MIC_DATA` (a build without capture clears the bit and refuses `MIC` with 12; the indicator never shows without capture, except in a test build, flags bit 5), bit 3 the iPhone notification relay answers (§6.12; not in safe mode) |
 | 7 | u16 | triggers this firmware can raise (bit i = trigger i) |
 | 9 | u16 | panel width = 640 |
 | 11 | u16 | panel height = 480 |
@@ -967,6 +975,55 @@ indicator's corner is repainted from the frame.
 
 `FC_INFO` body: 0: u8 version (1), 1: u8 flags (bit 0 the path is open), 2: u16 max message, 4: u16 max wire, 6: u32 ring
 size, 10: u32 history, 14: u32 records, 18: u32 nacks, 22: u32 presents.
+
+### 6.12 The iPhone notification relay (0.5.65)
+A host on an iPhone gets the phone's own notifications through the arm: iOS offers ANCS (Apple Notification Center Service)
+only to the peripheral it is connected to, as a GATT server, and has no API for an app to read them itself. So the arm is
+the ANCS consumer and passes everything on, over the same link. The host reads, keeps and draws the notifications; the arm
+doesn't look inside them and keeps no list.
+
+The wire format is that of Faceclaw's custom firmware for the G2 (one relay client serves both), on a characteristic of its
+own. All integers little-endian.
+
+**Commands**, a write with response to `ANCS`: `41 4E 01 op token:u32 [body]`. token is nonzero and chosen by the host.
+- 0 `START`, 8 bytes: end any session of this link, then look for ANCS (primary service, its characteristics, their CCCs),
+  subscribe to Data Source, and write Notification Source's CCC 0, then 1, which makes iOS list what it has. A session that
+  was running is replaced, without a `STOP`. Refused while an earlier session's requests are still out.
+- 1 `STOP`, 8 bytes, with the session's token: both CCCs to 0. The frames not yet sent are erased.
+- 2 `CP`, at most 80 bytes, with the session's token and once it is ready: the body is written to the Control Point. Only
+  ANCS's commands: 0 (get notification attributes, ≥ 6 bytes), 1 (get app attributes, ≥ 4 bytes, ending in the identifier's
+  terminator and an attribute ID of 0) and 2 (perform action, 6 bytes, action 0 or 1). One at a time.
+
+The answer to a write is an ATT error when it is refused: 0x08 not allowed now (below), or no session with this token, or
+`START` while requests are out; 0x0D malformed, or `CP` before ready; 0x11 no room (a `CP` still out).
+
+Who may write: an encrypted link, in the case too (the case's rule of §6.1 lets anyone write, and this reads the phone's
+notifications), a host subscribed to `ANCS`, and no safe mode. Nothing else grants anything: the token only lets the host
+tell this session's frames from an older one's. One link per arm, so whoever may write is the phone the frames came from.
+
+**Frames**, notifications on `ANCS`: `41 4E 01 kind token:u32 sequence:u16 flags [body]`, at most min(MTU − 3, 244) bytes.
+Flags: bit 0 the first frame of a value, bit 1 its last. sequence counts every frame of the session from 0 (`START`'s status
+is 0) and wraps; a frame the arm has no room for still takes its number, so a gap means something was lost and the host
+starts over with a new `START`.
+
+| kind | body |
+|---|---|
+| 0 | u8 status: 0 `START` taken, 1 ready, 2 a failure (of a CCC write, a `CP` the phone refused, or discovery), 3 this phone isn't offering ANCS (Share System Notifications is off, or it isn't an iPhone) |
+| 1 | a Notification Source value, 8 bytes. May come before status 1, as iOS lists what it has |
+| 2 | a Data Source value, in as many frames as it takes |
+| 3 | none: the phone accepted the last `CP` |
+
+After status 3, or 2 from a `START`, there is no session; the host may `START` again at any time, and each `START` looks for
+ANCS again, so that iOS withdrawing and offering it needs no other handling. A `CP` the phone refuses (status 2) leaves the
+session running.
+
+**Lifetime.** No GATT request goes to the phone before a `START`, so a host that isn't a relay client sees no difference. The
+session ends with the link: its subscriptions aren't restored at a later connection and nothing goes to another connection.
+Frames wait in an 8 KiB RAM ring until the link can take them, erased as they leave and whenever a session or the link ends;
+the host stack's own buffers hold the last ones until reused. Nothing is written to flash, and nothing about notifications
+goes to the log. There is no lease: g1v0 has no consumer of its own to return ANCS to, and CoreBluetooth ends the link when
+the last app using it goes. Any app on the phone that may use this link can do what the host does, which the arm cannot tell
+apart.
 
 ## 7. Time and eye sync
 - **Clock model** (`PING`): the host sends its time s; the arm replies with t_rx (receive) and t_tx

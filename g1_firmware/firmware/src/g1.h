@@ -5,6 +5,8 @@
 #include <stdint.h>
 #include <zephyr/kernel.h>
 
+struct bt_conn;
+
 #define PANEL_W 640
 #define PANEL_H 480
 #define PANEL_ROW_BYTES (PANEL_W / 2)   /* 4 bpp */
@@ -327,6 +329,11 @@ void fc_reset(void);
 void fc_indicator_cleared(void);
 size_t fc_info(uint8_t *b);
 
+/* ancs.c: the iPhone notification relay (VM.md §6.12) */
+uint8_t ancs_command(struct bt_conn *c, const uint8_t *v, uint16_t len);
+struct bt_conn *ancs_take(uint8_t *out, uint8_t *len);
+void ancs_link_down(void);
+
 /* assets.c: the asset store (VM.md §6.10); control requests return 0 or an error code */
 void assets_info(uint8_t *out);   /* 20 bytes */
 size_t assets_list(uint8_t first, uint8_t *out, size_t room);
@@ -355,6 +362,7 @@ void proto_ack(bool now);
  * for room in the queue */
 int proto_event(uint8_t type, const uint8_t *body, size_t len, bool block);
 void proto_notice(uint8_t kind, const uint8_t *body, size_t len);
+void proto_ancs_kick(void);
 void proto_mic_data(uint16_t first, uint8_t n, const uint8_t *frames, size_t len);
 void proto_mic_flush(void);
 uint32_t proto_mic_drops(void);
@@ -378,6 +386,8 @@ void mic_renew(void);
 void proto_new_epoch(void);
 uint8_t proto_credits(void);
 bool proto_connected(void);
+/* major, minor, revision of this image */
+void proto_version(uint8_t *v);
 bool proto_link_obeyed(void);
 uint32_t proto_link_interval_us(void);
 bool proto_writes_allowed(void);

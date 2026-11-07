@@ -62,7 +62,11 @@ Library tests, from the root (outputs land in the root; git-ignored):
         vm_test.c vm_v4_ref.c ../src/vm/vm.c ../src/vm/vm_gfx.c -o ../vm_test) && ./vm_test
 
 `mic_test` needs liblc3's objects (src/README.md "Tests"). The BlueZ builds need `pkg-config` and
-libsystemd's headers.
+libsystemd's headers. The firmware's iPhone notification relay, against a scripted phone (Zephyr stubbed in
+`tests/ancs_stubs/`):
+
+    cc -std=c11 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=all -Itests/ancs_stubs -Ig1_firmware/firmware/src \
+        tests/ancs_test.c -o ancs_test && ./ancs_test
 
 - Go (1.22+, cgo): `cd go && go vet ./... && go test -tags emulator ./...` (a few minutes; tag `emulator`
   = two emulated arms, no Bluetooth). Go's build cache does not see the library sources (`src/`, `third_party/`):

@@ -18,23 +18,19 @@ LOG_MODULE_REGISTER(g1v0, LOG_LEVEL_INF);
 
 void retained_log_boot_banner(void);
 
-static const uint8_t svc_uuid[] = {BT_UUID_128_ENCODE(0xf3da4d59, 0x277a, 0x4fc9, 0xa1ed, 0x41c9c22d4400)};
 static char name[16];
 
-/* Without the settings subsystem Zephyr would pick a new random address at every boot. A static
- * random address derived from the chip's FICR device ID stays the same across boots and images. */
-static void set_identity(void)
+/* The arm keeps the Bluetooth address Even's firmware has (Zephyr's default: the net core's static address, or what
+ * the settings hold), so a host's bond and what it remembers about the arm survive an install in either direction.
+ * Called once the identity is known, after settings_load(). The name tells the pairs in a room apart: stock's names
+ * end in the same six hex digits. */
+static void set_name(void)
 {
-	bt_addr_le_t addr = {.type = BT_ADDR_LE_RANDOM};
-	uint32_t id0 = NRF_FICR_S->INFO.DEVICEID[0];
-	uint32_t id1 = NRF_FICR_S->INFO.DEVICEID[1];
+	bt_addr_le_t id = {0};
+	size_t count = 1;
 
-	sys_put_le32(id0, &addr.a.val[0]);
-	sys_put_le16((uint16_t)id1, &addr.a.val[4]);
-	addr.a.val[5] |= 0xC0;
-	if (bt_id_create(&addr, NULL) < 0) {
-		LOG_WRN("could not set the FICR-based identity");
-	}
+	bt_id_get(&id, &count);
+	snprintf(name, sizeof(name), "G1CFW_%c_%02X%02X%02X", board_role() ? 'L' : 'R', id.a.val[2], id.a.val[1], id.a.val[0]);
 }
 
 static void adv_restart(struct k_work *work);
@@ -50,31 +46,31 @@ static const struct bt_le_adv_param adv_slow_param = BT_LE_ADV_PARAM_INIT(BT_LE_
 static volatile bool adv_on, adv_is_slow, adv_ready;
 static int64_t fast_until;
 
-/* The pair record (PROTOCOL.md §2.1): manufacturer data without a company ID (0xFFFF), format 1,
- * flags, then the frame serial, or the chip's device ID in hex on a board without one. Fixed for the
- * whole boot, so the advertising data is never updated while advertising. */
+/* The pair record (VM.md §6.1): manufacturer data without a company ID (0xFFFF), format 2, flags, the firmware's
+ * version, then the frame serial, or the chip's device ID in hex on a board without one. Fixed for the whole boot,
+ * so the advertising data is never updated while advertising. */
 static size_t pair_record(uint8_t *b)
 {
 	size_t n = strlen(g1_settings.serial);
 
 	b[0] = 0xFF;
 	b[1] = 0xFF;
-	b[2] = 1;
-	b[3] = board_role() | (IS_ENABLED(CONFIG_G1_NO_PANEL) ? 2 : 0) | (n ? 4 : 0);
+	b[2] = 2;
+	b[3] = board_role() | (IS_ENABLED(CONFIG_G1_NO_PANEL) ? 2 : 0) | (n ? 4 : 0) | (safe_level() ? 8 : 0);
+	proto_version(&b[4]);
 	if (n) {
-		memcpy(&b[4], g1_settings.serial, n);
+		memcpy(&b[7], g1_settings.serial, n);
 	} else {
-		n = snprintf((char *)&b[4], 17, "%08X%08X", NRF_FICR_S->INFO.DEVICEID[1], NRF_FICR_S->INFO.DEVICEID[0]);
+		n = snprintf((char *)&b[7], 17, "%08X%08X", NRF_FICR_S->INFO.DEVICEID[1], NRF_FICR_S->INFO.DEVICEID[0]);
 	}
-	return 4 + n;
+	return 7 + n;
 }
 
 static void adv_restart(struct k_work *work)
 {
-	uint8_t rec[4 + 17];
+	uint8_t rec[7 + 17];
 	const struct bt_data ad[] = {
 		BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
-		BT_DATA(BT_DATA_UUID128_ALL, svc_uuid, sizeof(svc_uuid)),
 		BT_DATA(BT_DATA_NAME_COMPLETE, name, strlen(name)),
 	};
 	const struct bt_data sd[] = {
@@ -178,7 +174,6 @@ int main(void)
 	mgmt_callback_register(&smp_reset_cb);
 	mgmt_callback_register(&smp_rx_cb);
 	board_init();
-	snprintf(name, sizeof(name), "G1v0%s_%c", safe_level() ? "S" : "", board_role() ? 'L' : 'R');
 	if (safe_level() < 2) {
 		pmic_start();
 	}
@@ -187,7 +182,6 @@ int main(void)
 	proto_init();
 	exec_start();
 	diag_netoff_boot();
-	set_identity();
 	if (netfallback_boot()) {
 		g1_reboot(CLEAN_HOST, false, false);
 	}
@@ -229,6 +223,7 @@ int main(void)
 		LOG_WRN("net fallback already used; staying up without BLE (panel/charging/health) for recovery");
 		return 0;
 	}
+	set_name();
 	bt_set_name(name);
 	fast_until = k_uptime_get() + ADV_FAST_S * 1000;
 	adv_ready = true;

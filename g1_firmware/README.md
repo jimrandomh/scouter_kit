@@ -18,6 +18,7 @@ What it gives you:
   host (a message takes 6–150 ms; both eyes change within a fraction of a millisecond when the programs agree on
   a time);
 - a panel standby for fast pop-ups (4 ms instead of 71 ms to light up, about 1 mA while waiting);
+- a relay of an iPhone's notifications (ANCS) to an app on that iPhone, for a host that asks for it;
 - charging, battery care and the charging case's link done exactly as Even's firmware does them; programs can read
   the case's lid, charger and battery, and whether the arm lies in the case. Lit pixels disturb the case's charging
   link, so the firmware keeps the panel's LEDs dark while the case talks to the arm, and the demos switch the panel

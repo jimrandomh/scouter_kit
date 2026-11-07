@@ -196,6 +196,39 @@ and PROTOCOL.md) are those of the development tree; `g1host.py`, `vm_check.py`, 
 `draw_bench.py` and `mic_check.py` are in `../tools/`, the emulator tests in `emulator/tests/`, and
 `emu/fwsrc/g1v0` is `firmware/`.
 
+### What 0.5.66 adds (Even's address, names that tell pairs apart, version in the advertising)
+
+- **Even's address.** `set_identity()` is gone, so Zephyr takes its default path as stock does: `settings_load()` reads
+  a stored identity, else the net core's static address. Both firmwares live on the same settings partition with the
+  same NCS 2.5.1, and `keys.c` reads stock's shorter key records, so a host's stock bond keeps working and the OS keeps one
+  remembered device per arm. The way back: an image without `BT_KEYS_OVERWRITE_OLDEST` rejects this firmware's longer
+  records. Host GATT caches now see two layouts under one address; `BT_GATT_SERVICE_CHANGED` and `BT_GATT_CACHING` are on.
+- **Names:** `G1CFW_L_XXXXXX` (low three address bytes), so pairs can be told apart; the same digits as stock's names.
+- **Advertising data:** the service UUID no longer fits (18 bytes, with a 16-byte name, in 31) and is gone: find arms by
+  name or by the pair record. The record is format 2: safe mode (flags bit 3) and the firmware's version, so a host knows
+  what an arm runs without connecting. Safe mode no longer changes the name.
+- **Supervision timeout:** under 2 s the arm asks for 4 s (VM.md §6.1, `link_guard`), for 420 ms seen on a Pixel in
+  crowded RF, where links died by supervision timeout.
+
+### What 0.5.65 adds (the iPhone notification relay)
+
+- **`ANCS`** (VM.md §6.12, `firmware/src/ancs.c`): a GATT client of the phone's ANCS on the link the phone made, relayed to a
+  host app with the wire format of Faceclaw's custom firmware for the G2. `CONFIG_BT_GATT_CLIENT` is new; RX stack 2560.
+- **Unlike the G2's** (which patches stock firmware and borrows its discovery): the relay finds ANCS itself, at every `START`,
+  which saves following Service Changed. Output goes through a ring to the evt thread, because `bt_gatt_notify` can wait for
+  a buffer and the BT thread must not; a frame is bound to its connection by a `bt_conn` reference, which also keeps the object
+  from being reused. No lease, having no stock consumer to give ANCS back to.
+- **The relay writes its CCCs with `bt_gatt_write`** and registers with `bt_gatt_resubscribe`, not `bt_gatt_subscribe` and
+  `bt_gatt_unsubscribe`: if the phone refuses the unsubscribe of the last subscription, `gatt_write_ccc_rsp` finds no list and
+  returns without calling back, which would leave the relay closing forever. The registrations are `VOLATILE`.
+- **Attributes:** after `FC`, so `attr_g1_svc[6]` keeps its place (`ATTR_ANCS`). SMP, a dynamic service, moves up by 3 handles;
+  the database hash changes, so bonded hosts get Service Changed, as for `PAIR` and `FC`. A host may not see the new
+  characteristic on its first connection after the update.
+- **Test:** `tests/ancs_test.c` (AGENTS.md) runs the state machine under ASan and UBSan against a scripted phone: each stage
+  against errors, `STOP`, a new `START` and the link's end. The emulator tests `ancs` and `ancs_refused` run it on Zephyr's
+  client against the virtual phone's ANCS (`A` in G1_VirtualPhone.cs): `CONFIG_G1_ANCS_ANY_LINK` in the emulator build, as the
+  virtual central cannot encrypt. Not tested against a real iPhone by these.
+
 ### What 0.5.63 adds (properties without instructions; the display path and the microphone)
 
 - **`PROP_SET`** (VM.md §6.4, `vm_prop_set`): a host on the display path has no arena words for `SYS_WRITE`'s operands.

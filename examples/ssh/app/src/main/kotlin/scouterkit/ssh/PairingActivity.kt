@@ -11,7 +11,6 @@ import android.bluetooth.le.ScanSettings
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.ParcelUuid
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -63,13 +62,15 @@ class PairingActivity : Activity() {
         val callback = object : ScanCallback() {
             override fun onScanResult(type: Int, result: ScanResult) {
                 val record = result.scanRecord?.getManufacturerSpecificData(0xFFFF) ?: return
-                if (record.size < 3 || record[0].toInt() != 1 || record[1].toInt() and 2 != 0) return // format 1, has a panel
-                val id = String(record, 2, record.size - 2, Charsets.UTF_8)
+                if (record.size < 3 || record[1].toInt() and 2 != 0) return // has a panel
+                val idAt = when (record[0].toInt()) { 1 -> 2; 2 -> 5; else -> return } // format 2: the version comes first
+                if (record.size <= idAt) return
+                val id = String(record, idAt, record.size - idAt, Charsets.UTF_8)
                 pairs.getOrPut(id) { mutableMapOf() }[record[1].toInt() and 1 != 0] =
                     Arm(result.device.address, record[1].toInt() and 1 != 0)
             }
         }
-        val filter = ScanFilter.Builder().setServiceUuid(ParcelUuid(GlassesLink.SERVICE)).build()
+        val filter = ScanFilter.Builder().setManufacturerData(0xFFFF, ByteArray(0)).build() // the pair record
         scanner.startScan(listOf(filter), ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), callback)
         handler.postDelayed({
             scanner.stopScan(callback)

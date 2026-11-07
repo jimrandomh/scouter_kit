@@ -1,6 +1,6 @@
 """Pair this PC with an arm running g1v0, in the case (g1v0 is bondable only with VBUS). LE Secure
-Connections, Just Works. Pairs only if the arm's current advertisement carries the g1v0 service UUID,
-so it never pairs with stock firmware. Own BlueZ agent that accepts only this address (adapter hci0).
+Connections, Just Works. Pairs only if the arm's current advertisement has a G1CFW_ name (before 0.5.66: the g1v0
+service UUID), so it never pairs with stock firmware. Own BlueZ agent that accepts only this address (adapter hci0).
 Usage: python3 -I arm_pair.py <address> [seconds to stay connected]
 Run `bluetoothctl pairable on` first and remove any stale bond of that address."""
 import asyncio
@@ -73,7 +73,9 @@ async def find_g1v0():
     found = asyncio.Future()
 
     def cb(dev, adv):
-        if dev.address.upper() == addr and G1V0_SVC in [u.lower() for u in adv.service_uuids] and not found.done():
+        name = adv.local_name or ""
+        ours = name.startswith("G1CFW_") or G1V0_SVC in [u.lower() for u in adv.service_uuids]  # the UUID: before 0.5.66
+        if dev.address.upper() == addr and ours and not found.done():
             found.set_result((dev, adv))
 
     async with BleakScanner(cb, scanning_mode="active"):

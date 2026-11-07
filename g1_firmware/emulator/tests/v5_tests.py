@@ -12,6 +12,7 @@ import json
 import math
 import os
 import random
+import re
 import struct
 import subprocess
 import sys
@@ -554,11 +555,12 @@ def triggers_checks(arm, res):
 def power_body(e, res):
     arm, h = e.arm, res["hello"]
     check_hello(h, VER)
-    assert h["board"] == 2 | (4 if h["mic"] else 0) and h["in_case"], h
+    assert h["board"] == 2 | (4 if h["mic"] else 0) | (8 if h["ancs"] else 0) and h["ancs"] and h["in_case"], h
     adv, rec, n_adv, n_sd = common.scan_record(arm)
-    res["adv"] = {"name": adv.get(9, b"").decode(), "uuid": adv.get(7) == common.G1_SVC, "pair": rec}
-    assert adv.get(9) == b"G1v0_R" and adv.get(7) == common.G1_SVC, res["adv"]
-    assert rec == {"role": "R", "no_panel": False, "from_serial": True, "pair_id": common.SERIAL}, rec
+    res["adv"] = {"name": adv.get(9, b"").decode(), "pair": rec}
+    assert re.fullmatch(rb"G1CFW_R_[0-9A-F]{6}", adv.get(9, b"")), res["adv"]
+    assert rec == {"role": "R", "no_panel": False, "from_serial": True, "safe_mode": False, "version": VER,
+                   "pair_id": common.SERIAL}, rec
     ack_repeat(arm, res)
     p = arm.power()
     res["power_boot"] = {k: p[k] for k in ("batt_mv", "batt_temp_dc", "vbus_mv", "flags", "imu_id", "imu_ctrl1_xl",
@@ -3328,6 +3330,221 @@ def test_faceclaw(name):
     return run(name, CUR_MIC, faceclaw_body)
 
 
+# ---------------------------------------------------------------- the iPhone notification relay (VM.md §6.12)
+
+AN_START, AN_STOP, AN_CP = 0, 1, 2
+AN_STATUS, AN_NS, AN_DS, AN_CP_DONE = 0, 1, 2, 3
+
+
+def an_command(arm, op, token, body=b""):
+    """One write with response to ANCS: 0 or the ATT error it was refused with."""
+    value = b"AN\x01" + bytes([op]) + struct.pack("<I", token) + body
+    before = len(arm.phone_log)
+    arm.tr.script(f"wr G1_ANCS {value.hex()}")
+    arm.pump()
+    arm.run_until(arm.tr.scripts_idle, 20, "the write's answer")
+    errors = [line for line in arm.phone_log[before:] if line.startswith("att-error ")]
+    return int(errors[-1][-2:], 16) if errors else 0
+
+
+def an_frames(arm):
+    """The relay's frames since the last call, parsed and checked."""
+    frames = []
+    for d in arm.ancs_frames:
+        assert d[:3] == b"AN\x01" and len(d) >= 11 and len(d) <= min(arm.tr.mtu - 3, 244), d.hex()
+        token, seq, flags = struct.unpack_from("<IHB", d, 4)
+        frames.append({"kind": d[3], "token": token, "seq": seq, "flags": flags, "body": d[11:]})
+    arm.ancs_frames.clear()
+    return frames
+
+
+def an_wait(arm, count, what, timeout=20):
+    arm.run_until(lambda: len(arm.ancs_frames) >= count, timeout, what)
+    return an_frames(arm)
+
+
+def an_status(frames):
+    return [f["body"][0] for f in frames if f["kind"] == AN_STATUS]
+
+
+def an_phone(arm, prefix="ancs "):
+    """What the phone saw since the last call, of the lines that start with prefix."""
+    lines = [line for line in arm.phone_log if line.startswith(prefix)]
+    arm.phone_log.clear()
+    return lines
+
+
+def an_start(arm, token):
+    """START to ready, through Zephyr's client against the virtual phone's ANCS: returns what the phone saw."""
+    assert an_command(arm, AN_START, token) == 0
+    frames = an_wait(arm, 2, f"START {token} to end")
+    assert an_status(frames) == [0, 1], frames
+    assert [f["seq"] for f in frames] == [0, 1] and {f["token"] for f in frames} == {token}, frames
+    return an_phone(arm)
+
+
+def ancs_body(e, res):
+    arm = e.arm
+    tr = arm.tr
+    assert res["hello"]["ancs"], res["hello"]
+    # a host that doesn't start the relay gets no GATT client on its link
+    arm.wait(1)
+    res["requests_before_start"] = an_phone(arm)
+    assert res["requests_before_start"] == [], res["requests_before_start"]
+
+    # nobody to send to yet
+    assert an_command(arm, AN_START, 1) == 0x08
+    tr.script("subscribe G1_ANCS")
+    arm.pump()
+    arm.run_until(tr.scripts_idle, 20, "subscribe")
+    arm.phone_log.clear()
+
+    # a phone that doesn't share ANCS: told apart from a failure, and nothing was written to it
+    assert an_command(arm, AN_START, 1) == 0
+    frames = an_wait(arm, 2, "no ANCS")
+    res["no_ancs_status"] = an_status(frames)
+    assert res["no_ancs_status"] == [0, 3], frames
+    lines = an_phone(arm)
+    assert lines == ["ancs request 06"], lines
+
+    # malformed, and without a session to act on
+    assert an_command(arm, 3, 1) == 0x0D
+    assert an_command(arm, AN_START, 0) == 0x0D
+    assert an_command(arm, AN_START, 1, b"\0") == 0x0D
+    assert an_command(arm, AN_STOP, 1) == 0x08
+    assert an_command(arm, AN_CP, 1, bytes([2, 7, 0, 0, 0, 1])) == 0x08
+    arm.phone_log.clear()
+
+    # the session: discovery, then DS on, NS off and on
+    tr.phone_ancs("on")
+    lines = an_start(arm, 2)
+    res["start_requests"] = lines
+    assert [line for line in lines if " ccc " in line] == ["ancs ccc ds 01", "ancs ccc ns 00", "ancs ccc ns 01"], lines
+    assert "ancs request 06" in lines and "ancs request 08" in lines and "ancs request 04" in lines, lines
+
+    # Notification Source, as sent
+    for uid in (7, 8, 9):
+        tr.phone_ancs("ns", (bytes([0, 0, 1, 1]) + struct.pack("<I", uid)).hex())
+    frames = an_wait(arm, 3, "Notification Source")
+    assert [f["kind"] for f in frames] == [AN_NS] * 3 and [f["seq"] for f in frames] == [2, 3, 4], frames
+    assert [struct.unpack_from("<I", f["body"], 4)[0] for f in frames] == [7, 8, 9], frames
+    assert all(f["flags"] == 3 for f in frames), frames
+    # not one: dropped
+    tr.phone_ancs("ns", "00000101")
+    arm.wait(0.3)
+    assert an_frames(arm) == []
+
+    # a Control Point command reaches the phone unchanged, and its answer the host
+    cp = bytes([0, 7, 0, 0, 0, 0, 1, 128, 0, 3, 0, 2])
+    assert an_command(arm, AN_CP, 2, cp) == 0
+    frames = an_wait(arm, 1, "CP done")
+    assert frames[0]["kind"] == AN_CP_DONE and frames[0]["body"] == b"" and frames[0]["flags"] == 3, frames
+    assert an_phone(arm) == ["ancs cp " + cp.hex().upper()]
+
+    # a Data Source value larger than a frame holds comes in order, marked first and last
+    value = bytes((i * 11 + 3) & 255 for i in range(240))
+    tr.phone_ancs("ds", value.hex())
+    frames = an_wait(arm, 2, "Data Source")
+    assert [f["kind"] for f in frames] == [AN_DS] * 2 and [f["flags"] for f in frames] == [1, 2], frames
+    assert frames[0]["body"] + frames[1]["body"] == value
+    res["ds_frame_bytes"] = [len(f["body"]) for f in frames]
+
+    # ANCS refuses a command
+    tr.phone_ancs("error", "A3")
+    assert an_command(arm, AN_CP, 2, cp) == 0
+    frames = an_wait(arm, 1, "CP refused")
+    assert an_status(frames) == [2], frames
+    tr.phone_ancs("error", "0")
+    arm.phone_log.clear()
+
+    # commands that aren't ANCS's never reach the phone
+    for bad in (bytes([3, 0, 0, 0, 0, 0]), bytes([0, 0, 0, 0, 0]), bytes([1]) + b"abc\0\1", bytes([2, 7, 0, 0, 0, 2]), bytes(80)):
+        assert an_command(arm, AN_CP, 2, bad) == 0x0D, bad.hex()
+    assert an_command(arm, AN_CP, 99, cp) == 0x08
+    assert an_phone(arm, "ancs cp") == []
+
+    # the app's recovery: a new START on a live session, numbered from 0; the phone is asked to list again
+    lines = an_start(arm, 3)
+    assert [line for line in lines if " ccc " in line] == ["ancs ccc ds 01", "ancs ccc ns 00", "ancs ccc ns 01"], lines
+    tr.phone_ancs("ns", bytes(8).hex())
+    frames = an_wait(arm, 1, "the new session's first event")
+    assert frames[0]["token"] == 3 and frames[0]["seq"] == 2, frames
+
+    # the display path and the relay at once
+    import g1fc
+    fc = g1fc.FcLink(arm)
+    tr.phone_ancs("ns", bytes(8).hex())
+    fc.send(g1fc.PRESENT)
+    assert [f["kind"] for f in an_wait(arm, 1, "NS beside a record")] == [AN_NS]
+
+    # STOP: both CCCs off, and what the phone sends now goes nowhere
+    assert an_command(arm, AN_STOP, 2) == 0x08, "a stale token doesn't stop it"
+    arm.phone_log.clear()
+    assert an_command(arm, AN_STOP, 3) == 0
+    arm.run_until(lambda: len(arm.phone_log) >= 2, 20, "CCCs off")
+    assert an_phone(arm) == ["ancs ccc ns 00", "ancs ccc ds 00"]
+    tr.phone_ancs("ns", bytes(8).hex())
+    tr.phone_ancs("ds", "00")
+    arm.wait(0.3)
+    assert an_frames(arm) == []
+    assert an_command(arm, AN_STOP, 3) == 0x08
+
+    # started again on the same link: the subscriptions are still in Zephyr's list and must not get in the way
+    an_start(arm, 4)
+    tr.phone_ancs("ns", bytes(8).hex())
+    assert an_wait(arm, 1, "after STOP and START")[0]["kind"] == AN_NS
+
+    # the link ends in the middle of it: everything is gone, and the next link starts from nothing
+    before = arm.losses()
+    tr.phone_ancs("ns", bytes(8).hex())
+    tr.go_silent(30000)
+    common.wait_new_link(arm, before, 90)
+    arm.ancs_frames.clear()
+    arm.phone_log.clear()
+    res["hello_after_link"] = arm.hello()["encrypted"]
+    tr.script("subscribe G1_ANCS")
+    arm.pump()
+    arm.run_until(tr.scripts_idle, 20, "subscribe")
+    assert an_command(arm, AN_STOP, 4) == 0x08, "the old session's token"
+    tr.phone_ancs("ns", bytes(8).hex())
+    arm.wait(0.3)
+    assert an_frames(arm) == [], "a subscription survived the link"
+    arm.phone_log.clear()
+    lines = an_start(arm, 5)
+    assert [line for line in lines if " ccc " in line] == ["ancs ccc ds 01", "ancs ccc ns 00", "ancs ccc ns 01"], lines
+    tr.phone_ancs("ns", bytes(8).hex())
+    assert an_wait(arm, 1, "after the new link")[0]["token"] == 5
+
+    # ANCS withdrawn on a live link (Share System Notifications off): the next START says so
+    tr.phone_ancs("off")
+    assert an_command(arm, AN_START, 6) == 0
+    res["withdrawn_status"] = an_status(an_wait(arm, 2, "ANCS gone"))
+    assert res["withdrawn_status"] == [0, 3], res["withdrawn_status"]
+
+
+def test_ancs(name):
+    # The test build: the relay works on the emulator's unencrypted link.
+    return run(name, CUR_MIC, ancs_body)
+
+
+def ancs_refused_body(e, res):
+    """The arm's own build, in the case: writes are obeyed, but this one needs an encrypted link like the microphone."""
+    arm = e.arm
+    assert res["hello"]["ancs"] and res["hello"]["in_case"] and not res["hello"]["encrypted"], res["hello"]
+    arm.tr.phone_ancs("on")
+    arm.tr.script("subscribe G1_ANCS")
+    arm.pump()
+    arm.run_until(arm.tr.scripts_idle, 20, "subscribe")
+    arm.phone_log.clear()
+    assert an_command(arm, AN_START, 1) == 0x08
+    arm.wait(1)
+    assert an_frames(arm) == [] and an_phone(arm) == []
+
+
+def test_ancs_refused(name):
+    return run(name, CUR, ancs_refused_body)
+
+
 TESTS = {"smoke": test_smoke, "vectors": test_vectors, "chain": test_chain, "chain_right": test_chain_right,
          "power": test_power, "unattended": test_unattended, "examples": test_examples, "vm": test_vm, "mic": test_mic,
          "mic_capture": test_mic_capture, "mic_lease": test_mic_lease, "mic_popup": test_mic_popup, "imu_base": test_imu_base, "imu_base_left": test_imu_base_left,
@@ -3338,7 +3555,7 @@ TESTS = {"smoke": test_smoke, "vectors": test_vectors, "chain": test_chain, "cha
          "sessions": test_sessions, "imu": test_imu, "diag": test_diag, "pair_link": test_pair_link,
          "peer": test_peer, "pair_stream": test_pair_stream,
          "panel_read": test_panel_read, "video": test_video, "panel_guard": test_panel_guard,
-         "assets": test_assets, "faceclaw": test_faceclaw}
+         "assets": test_assets, "faceclaw": test_faceclaw, "ancs": test_ancs, "ancs_refused": test_ancs_refused}
 for _t in ("crash", "hang", "thread_hang", "safe_mode", "lost_packet", "reset_mid_frame", "security", "pmic_watchdog",
            "i2c_errors", "no_pmic"):
     TESTS[_t] = getattr(common, "test_" + _t)

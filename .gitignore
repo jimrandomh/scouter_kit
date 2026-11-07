@@ -18,6 +18,7 @@ g1_firmware/work
 /glasses_check
 /video_records
 /vm_test
+/ancs_test
 build/
 .gradle/
 .cxx/

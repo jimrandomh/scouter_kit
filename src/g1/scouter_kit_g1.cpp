@@ -1108,11 +1108,11 @@ struct Candidate {
   std::string pair_id;
 };
 
-// The pair record bytes after the company ID: format 1, flags, pair ID.
+// The pair record bytes after the company ID: format, flags, in format 2 the firmware's version (3 bytes), pair ID.
 [[maybe_unused]] bool ParsePairRecord(const std::vector<uint8_t> &data, int *flags, std::string *pair_id) {
-  if (data.size() < 3 || data[0] != 1) return false;
+  if (data.size() < 3 || data[0] < 1 || data[0] > 2 || (data[0] == 2 && data.size() < 6)) return false;
   *flags = data[1];
-  pair_id->assign(data.begin() + 2, data.end());
+  pair_id->assign(data.begin() + (data[0] == 2 ? 5 : 2), data.end());
   return true;
 }
 
@@ -4736,6 +4736,9 @@ private:
     int role = -1;
     if (name.size() >= 2 && name.compare(name.size() - 2, 2, "_L") == 0) role = 0;
     if (name.size() >= 2 && name.compare(name.size() - 2, 2, "_R") == 0) role = 1;
+    // Since 0.5.66 an arm advertises its name and pair record, without the service UUID.
+    if (name.rfind("G1CFW_L_", 0) == 0) ours = true, role = 0;
+    if (name.rfind("G1CFW_R_", 0) == 0) ours = true, role = 1;
     Candidate c{path, p["Address"].s, p["Paired"].b, p["Connected"].b,
                 p.count("RSSI") ? int(p["RSSI"].i) : -999, -1, ""};
     if (ParsePairRecord(p["ManufacturerData"].data[0xFFFF], &c.flags, &c.pair_id)) role = c.flags & 1 ? 0 : 1;
@@ -4787,7 +4790,7 @@ private:
     sd_bus_message_new_method_call(bus_, &m, "org.bluez", adapter_.c_str(), "org.bluez.Adapter1",
                                    "SetDiscoveryFilter");
     if (Searching())
-      sd_bus_message_append(m, "a{sv}", 2, "Transport", "s", "le", "UUIDs", "as", 1, kService);
+      sd_bus_message_append(m, "a{sv}", 2, "Transport", "s", "le", "Pattern", "s", "G1");
     else
       sd_bus_message_append(m, "a{sv}", 1, "Transport", "s", "le");
     sd_bus_call(bus_, m, 0, nullptr, nullptr);

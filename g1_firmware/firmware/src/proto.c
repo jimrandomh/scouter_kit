@@ -71,6 +71,10 @@ static struct bt_uuid_128 ctrl_uuid = BT_UUID_INIT_128(G1_UUID(2));
 static struct bt_uuid_128 evt_uuid = BT_UUID_INIT_128(G1_UUID(3));
 static struct bt_uuid_128 pair_uuid = BT_UUID_INIT_128(G1_UUID(4));
 static struct bt_uuid_128 fc_uuid = BT_UUID_INIT_128(G1_UUID(5));
+static struct bt_uuid_128 ancs_uuid = BT_UUID_INIT_128(G1_UUID(6));
+
+/* ANCS's value in the service below: attr_g1_svc[6], EVT's, must keep its place, so new characteristics go last. */
+#define ATTR_ANCS 13
 
 bool proto_connected(void) { return conn != NULL; }
 
@@ -440,6 +444,25 @@ static ssize_t on_fc(struct bt_conn *c, const struct bt_gatt_attr *attr, const v
 	return len;
 }
 
+/* ANCS (VM.md §6.12): the host's commands to the iPhone notification relay. Like MIC, it needs an encrypted link in the
+ * case too: the case's rule lets anyone write, and this reads the phone's notifications. */
+static ssize_t on_ancs(struct bt_conn *c, const struct bt_gatt_attr *attr, const void *buf, uint16_t len,
+		       uint16_t offset, uint8_t flags)
+{
+	uint8_t err;
+
+	if (offset) {
+		return BT_GATT_ERR(BT_ATT_ERR_INVALID_OFFSET);
+	}
+	if (safe_level() || (!conn_encrypted && !IS_ENABLED(CONFIG_G1_ANCS_ANY_LINK)) ||
+	    !bt_gatt_is_subscribed(c, &attr_g1_svc[ATTR_ANCS], BT_GATT_CCC_NOTIFY)) {
+		return BT_GATT_ERR(BT_ATT_ERR_AUTHORIZATION);
+	}
+	health_bt_traffic();
+	err = ancs_command(c, buf, len);
+	return err ? BT_GATT_ERR(err) : len;
+}
+
 BT_GATT_SERVICE_DEFINE(g1_svc,
 	BT_GATT_PRIMARY_SERVICE(&svc_uuid),
 	BT_GATT_CHARACTERISTIC(&cmd_uuid.uuid, BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
@@ -452,7 +475,11 @@ BT_GATT_SERVICE_DEFINE(g1_svc,
 			       BT_GATT_PERM_READ_ENCRYPT | BT_GATT_PERM_WRITE_ENCRYPT, on_pair_read, on_pair_write, NULL),
 	BT_GATT_CHARACTERISTIC(&fc_uuid.uuid, BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
 			       BT_GATT_PERM_WRITE, NULL, on_fc, NULL),
+	BT_GATT_CHARACTERISTIC(&ancs_uuid.uuid, BT_GATT_CHRC_WRITE | BT_GATT_CHRC_NOTIFY,
+			       BT_GATT_PERM_WRITE, NULL, on_ancs, NULL),
+	BT_GATT_CCC(NULL, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
 );
+BUILD_ASSERT(ATTR_ANCS + 2 == 15, "ATTR_ANCS: the value of the service's last characteristic, then its CCC");
 
 static size_t reply_head(uint8_t *b, uint8_t op, uint8_t tag, uint8_t status)
 {
@@ -463,7 +490,7 @@ static size_t reply_head(uint8_t *b, uint8_t op, uint8_t tag, uint8_t status)
 	return n + 2;
 }
 
-static void version(uint8_t *v)
+void proto_version(uint8_t *v)
 {
 	const char *s = CONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION;
 	int i = 0;
@@ -493,6 +520,12 @@ static bool has_mic(void)
 	return !IS_ENABLED(CONFIG_G1_NO_PANEL) && mic_available();
 }
 
+/* HELLO.board bit 3 means the ANCS relay answers (VM.md §6.12). */
+static bool has_ancs(void)
+{
+	return !safe_level();
+}
+
 /* HELLO body, 35 bytes (VM.md §6.4) */
 static size_t hello(uint8_t *b, size_t n)
 {
@@ -501,10 +534,11 @@ static size_t hello(uint8_t *b, size_t n)
 
 	k_spin_unlock(&qlock, key);
 	b[n] = PROTO_VERSION;
-	version(&b[n + 1]);
+	proto_version(&b[n + 1]);
 	b[n + 4] = board_role();
 	b[n + 5] = state_flags();
-	b[n + 6] = (IS_ENABLED(CONFIG_G1_NO_PANEL) ? 1 : 0) | (proto_bondable() ? 2 : 0) | (has_mic() ? 4 : 0);
+	b[n + 6] = (IS_ENABLED(CONFIG_G1_NO_PANEL) ? 1 : 0) | (proto_bondable() ? 2 : 0) | (has_mic() ? 4 : 0) |
+		   (has_ancs() ? 8 : 0);
 	put16(&b[n + 7], exec_triggers());
 	put16(&b[n + 9], PANEL_W);
 	put16(&b[n + 11], PANEL_H);
@@ -862,6 +896,66 @@ static void handle_ctrl(struct ctrl_req *r)
 /* The ACK that reports a drained queue is sent once more ACK_REPEAT_MS later, unless another ACK
  * went out meanwhile: a lost last ACK then does not leave the host waiting (VM.md §6.2). */
 #define ACK_REPEAT_MS 100
+/* Frames of the ANCS relay sent per pass of the thread, so that ACKs and control replies get their turn. */
+#define ANCS_PER_PASS 8
+
+void proto_ancs_kick(void)
+{
+	k_sem_give(&evt_sem);
+}
+
+static void send_ancs(void)
+{
+	static uint8_t d[MAX_PKT];
+	struct bt_conn *c;
+	uint8_t len;
+	int sent = 0;
+
+	while (sent < ANCS_PER_PASS && (c = ancs_take(d, &len)) != NULL) {
+		if (bt_gatt_is_subscribed(c, &attr_g1_svc[ATTR_ANCS], BT_GATT_CCC_NOTIFY)) {
+			int err = bt_gatt_notify(c, &attr_g1_svc[ATTR_ANCS], d, len);
+
+			if (err) {
+				LOG_WRN("ANCS notify failed: %d", err);
+			}
+		}
+		bt_conn_unref(c);
+		sent++;
+	}
+	if (sent) {
+		memset(d, 0, sizeof(d));
+	}
+	if (sent == ANCS_PER_PASS) {
+		k_sem_give(&evt_sem);
+	}
+}
+
+/* A central can settle on a supervision timeout of a few hundred ms (420 ms on a Pixel, while it juggled links), which a
+ * burst of 2.4 GHz interference outlasts. Ask for one that rides it out, with the same interval and latency, a few
+ * times per connection: the central decides. */
+#define LINK_MIN_TIMEOUT 200 /* x 10 ms */
+#define LINK_ASK_TIMEOUT 400
+#define LINK_ASK_GAP_MS 5000
+#define LINK_ASKS 5
+
+static uint8_t link_asks;
+static int64_t link_ask_at;
+
+static void link_guard(int64_t now)
+{
+	if (!conn || !conn_timeout || conn_timeout >= LINK_MIN_TIMEOUT || link_asks >= LINK_ASKS || now < link_ask_at) {
+		return;
+	}
+	struct bt_le_conn_param p = {
+		.interval_min = conn_interval, .interval_max = conn_interval,
+		.latency = conn_latency, .timeout = LINK_ASK_TIMEOUT,
+	};
+	int err = bt_conn_le_param_update(conn, &p);
+
+	link_asks++;
+	link_ask_at = now + LINK_ASK_GAP_MS;
+	LOG_INF("link: timeout %u x 10 ms is short, asked for %u: %d", conn_timeout, LINK_ASK_TIMEOUT, err);
+}
 
 static void evt_thread(void *p1, void *p2, void *p3)
 {
@@ -890,7 +984,9 @@ static void evt_thread(void *p1, void *p2, void *p3)
 		while (mic_take(mic_buf, &mic_len)) {
 			send(mic_buf, mic_len);
 		}
+		send_ancs();
 		now = k_uptime_get();
+		link_guard(now);
 		if (atomic_get(&ack_pending) && (atomic_get(&ack_now) || now >= ack_due)) {
 			atomic_set(&ack_pending, 0);
 			atomic_set(&ack_now, 0);
@@ -915,6 +1011,8 @@ static void connected(struct bt_conn *c, uint8_t err)
 	}
 	conn = bt_conn_ref(c);
 	conn_encrypted = false;
+	link_asks = 0;
+	link_ask_at = k_uptime_get() + LINK_ASK_GAP_MS;
 	if (bt_conn_get_info(c, &info) == 0) {
 		conn_interval = info.le.interval;
 		conn_latency = info.le.latency;
@@ -936,6 +1034,7 @@ static void disconnected(struct bt_conn *c, uint8_t reason)
 	events_mask = exec_events(0);
 	exec_link_down();
 	fc_link_down();
+	ancs_link_down();
 	LOG_INF("disconnected (reason 0x%02x)", reason);
 	adv_kick();
 }

@@ -10,13 +10,14 @@ README.md first: installing over Even's firmware is a point of no return.
                                                    pictures were: stock then lacks them (they do not come back)
 
 --stock: the arm runs Even's firmware (the link is kept alive with its heartbeat, no g1v0 checks);
---side L|R finds the arm by its g1v0 name after the first install (its address changes).
+--side L|R finds the arm by its name after an install that changes firmware (from before 0.5.66, also its address).
 --emu SOCKET instead of --ble: an emulated arm (scripts/bridge_start.sh). --yes: do not ask.
 """
 import argparse
 import asyncio
 import hashlib
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -26,8 +27,6 @@ from pathlib import Path
 FW = Path(__file__).resolve().parent
 sys.path.insert(0, str(FW.parent / "tools"))
 import g1host as g  # noqa: E402
-
-G1V0_SVC = "f3da4d59-277a-4fc9-a1ed-41c9c22d4400"
 
 
 def image_version(img):
@@ -103,7 +102,7 @@ def scan(args, stock, timeout=240.0):
         if stock:
             ok = name.startswith("Even G1_") and f"_{args.side}_" in name
         else:
-            ok = G1V0_SVC in [u.lower() for u in adv.service_uuids] and name in (f"G1v0_{args.side}", f"G1v0S_{args.side}")
+            ok = re.fullmatch(rf"G1CFW_{args.side}_[0-9A-F]{{6}}|G1v0S?_{args.side}", name)
         if ok:
             found.append((dev.address, name))
 
@@ -176,7 +175,6 @@ def install(args, img, stock_after):
             if stock_after:
                 return
             address = seen[0]
-            print("  a new address: pair the PC with it in the case (README.md, step 5)")
         time.sleep(15)
         arm = reconnect(args, address)
     for attempt in range(5):

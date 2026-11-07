@@ -85,6 +85,12 @@ config G1_MIC_ANY_LINK
 	  VM.md §6.5: MIC needs an encrypted link, in the case too. The emulator's virtual central cannot
 	  pair, so its test build sets this to exercise the capture, the indicator and the stop rules.
 
+config G1_ANCS_ANY_LINK
+	bool "Emulator test build: the ANCS relay on an unencrypted link; never on an arm"
+	default n
+	help
+	  VM.md §6.12: the relay needs an encrypted link, in the case too. The emulator's virtual central cannot pair.
+
 config G1_MIC_128MHZ
 	bool "Run the app core at 128 MHz while the microphone captures"
 	default n

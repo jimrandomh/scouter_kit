@@ -260,6 +260,7 @@ def test_safe_mode(name):
         h = arm.hello()
         res["hello_safe"] = {k: h[k] for k in ("unhealthy", "safe_level", "safe_mode", "panel_on")}
         assert h["safe_mode"] and h["safe_level"] == 1, h
+        assert not h["ancs"], h
         res["smp_in_safe_mode"] = arm.smp.image_list()
         n_err = len(arm.errors)
         fr = arm.alloc(g.FRAME_H * g.FRAME_STRIDE)

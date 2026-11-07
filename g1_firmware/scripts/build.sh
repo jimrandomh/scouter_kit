@@ -3,7 +3,7 @@
 #   g1v0-vXYZ         the G1 image to install (zephyr/app_update.bin)
 #   g1v0-vXYZ'        the same source as version NEXT (default: patch + 1), the emulator's update test
 #   g1v0-dk-vXYZ      the nRF5340 DK variant (no panel, 120 s pairing window after boot)
-#   g1v0-vXYZ-emumic  the emulator test variant (panel timeout 2 s, MIC on the emulator's unencrypted link, IN_CASE hold 40 s)
+#   g1v0-vXYZ-emumic  the emulator test variant (panel timeout 2 s, MIC and ANCS on the emulator's unencrypted link, IN_CASE hold 40 s)
 # into $G1_BUILD (default $G1_WORK/build), logs in its logs/. Needs scripts/setup.sh build first.
 # Usage: scripts/build.sh VERSION [NEXT]
 set -eu
@@ -28,5 +28,5 @@ b() {
 b "g1v0-v$v" "-DCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION=\"$V+0\"" &
 b "g1v0-v$n" "-DCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION=\"$N+0\"" &
 b "g1v0-dk-v$v" $DK "-DCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION=\"$V+0\"" &
-b "g1v0-v$v-emumic" -DCONFIG_G1_PANEL_IDLE_S=2 -DCONFIG_G1_MIC_ANY_LINK=y -DCONFIG_G1_IN_CASE_HOLD_S=40 "-DCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION=\"$V+0\"" &
+b "g1v0-v$v-emumic" -DCONFIG_G1_PANEL_IDLE_S=2 -DCONFIG_G1_MIC_ANY_LINK=y -DCONFIG_G1_ANCS_ANY_LINK=y -DCONFIG_G1_IN_CASE_HOLD_S=40 "-DCONFIG_MCUBOOT_IMGTOOL_SIGN_VERSION=\"$V+0\"" &
 wait
